@@ -45,6 +45,7 @@ using v8::ReadOnly;
 using v8::Signature;
 using v8::String;
 using v8::Value;
+using v8::Symbol;
 
 namespace {
 
@@ -129,6 +130,7 @@ void FSEventWrap::RegisterExternalReferences(
 }
 
 void FSEventWrap::New(const FunctionCallbackInfo<Value>& args) {
+  std::cout << "FSEventWrap::New" << std::endl;
   CHECK(args.IsConstructCall());
   Environment* env = Environment::GetCurrent(args);
   new FSEventWrap(env, args.This());
@@ -180,6 +182,7 @@ void FSEventWrap::Start(const FunctionCallbackInfo<Value>& args) {
 
 void FSEventWrap::OnEvent(uv_fs_event_t* handle, const char* filename,
     int events, int status) {
+  std::cout << "FSEventWrap::OnEvent" << std::endl;
   FSEventWrap* wrap = static_cast<FSEventWrap*>(handle->data);
   Environment* env = wrap->env();
 
@@ -234,7 +237,11 @@ void FSEventWrap::OnEvent(uv_fs_event_t* handle, const char* filename,
     }
   }
 
+  Local<String> on_edy_string = String::NewFromUtf8(env->isolate(), "onedy", v8::NewStringType::kNormal).ToLocalChecked();
+  /* Local<Symbol> on_edy = Symbol::For(env->isolate(), on_edy_string); */
+
   wrap->MakeCallback(env->onchange_string(), arraysize(argv), argv);
+  wrap->MakeCallback(on_edy_string, arraysize(argv), argv);
 }
 
 }  // anonymous namespace

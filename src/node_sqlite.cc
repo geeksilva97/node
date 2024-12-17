@@ -664,6 +664,10 @@ void DatabaseSync::CustomFunction(const FunctionCallbackInfo<Value>& args) {
   CHECK_ERROR_OR_THROW(env->isolate(), db->connection_, r, SQLITE_OK, void());
 }
 
+void DatabaseSync::Backup(const FunctionCallbackInfo<Value>& args) {
+  Environment* env = Environment::GetCurrent(args);
+}
+
 void DatabaseSync::CreateSession(const FunctionCallbackInfo<Value>& args) {
   std::string table;
   std::string db_name = "main";
@@ -1678,6 +1682,7 @@ static void Initialize(Local<Object> target,
 
   DefineConstants(constants);
 
+  SetProtoMethod(isolate, db_tmpl, "backup", DatabaseSync::Backup);
   SetProtoMethod(isolate, db_tmpl, "open", DatabaseSync::Open);
   SetProtoMethod(isolate, db_tmpl, "close", DatabaseSync::Close);
   SetProtoMethod(isolate, db_tmpl, "prepare", DatabaseSync::Prepare);
