@@ -119,6 +119,7 @@ void FSEventWrap::Initialize(Local<Object> target,
       Local<FunctionTemplate>(),
       static_cast<PropertyAttribute>(ReadOnly | DontDelete | DontEnum));
 
+  // https://github.com/geeksilva97/node/blob/a73c41c51e7711086b9801afd5e91ae2f96a7694/src/util.cc#L685
   SetConstructorFunction(context, target, "FSEvent", t);
 }
 

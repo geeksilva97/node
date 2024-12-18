@@ -75,6 +75,7 @@
   V(signal_wrap)                                                               \
   V(spawn_sync)                                                                \
   V(sqlite)                                                                    \
+  V(sqlite_backup)                                                             \
   V(stream_pipe)                                                               \
   V(stream_wrap)                                                               \
   V(string_decoder)                                                            \

@@ -665,7 +665,7 @@ void DatabaseSync::CustomFunction(const FunctionCallbackInfo<Value>& args) {
 }
 
 void DatabaseSync::Backup(const FunctionCallbackInfo<Value>& args) {
-  Environment* env = Environment::GetCurrent(args);
+  std::cout << "DatabaseSync::Backup" << std::endl;
 }
 
 void DatabaseSync::CreateSession(const FunctionCallbackInfo<Value>& args) {
@@ -1698,6 +1698,8 @@ static void Initialize(Local<Object> target,
                  DatabaseSync::EnableLoadExtension);
   SetProtoMethod(
       isolate, db_tmpl, "loadExtension", DatabaseSync::LoadExtension);
+  // posso adicionar meu constructor do backup aqui e só utilizar no JS
+  /* SetConstructorFunction(context, target, "Backup", db_tmpl); */
   SetConstructorFunction(context, target, "DatabaseSync", db_tmpl);
   SetConstructorFunction(context,
                          target,

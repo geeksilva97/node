@@ -137,6 +137,7 @@ BuiltinLoader::BuiltinCategories BuiltinLoader::GetBuiltinCategories() const {
         "internal/quic/state",
 #endif             // !NODE_OPENSSL_HAS_QUIC
         "sqlite",  // Experimental.
+        "sqlite_backup",  // Experimental.
         "sys",     // Deprecated.
         "wasi",    // Experimental.
         "internal/test/binding", "internal/v8_prof_polyfill",

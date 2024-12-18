@@ -42,3 +42,12 @@ Local<FunctionTemplate> HandleWrap::GetConstructorTemplate(
   return tmpl;
 }
 ```
+
+
+# Where the binding happens
+
+The binding happens in the file `node.gyp`. Every C++ file that must be compiled should appear there
+
+A good example of the whole path
+
+https://github.com/geeksilva97/node/commit/b4e8f1b6bb3616ba222c4513218aa1fa9d543d8e#diff-274f941c2c63af2f20356e9417e17087320baec78ac2fd4ccffa753178fbb4c9

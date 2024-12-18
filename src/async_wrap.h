@@ -66,6 +66,7 @@ namespace node {
   V(QUIC_SESSION)                                                              \
   V(QUIC_STREAM)                                                               \
   V(QUIC_UDP)                                                                  \
+  V(SQLITE_BACKUP)                                                              \
   V(SHUTDOWNWRAP)                                                              \
   V(SIGNALWRAP)                                                                \
   V(STATWATCHER)                                                               \

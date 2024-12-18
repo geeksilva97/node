@@ -139,6 +139,7 @@
       'src/node_snapshotable.cc',
       'src/node_sockaddr.cc',
       'src/node_sqlite.cc',
+      'src/node_sqlite_backup.cc',
       'src/node_stat_watcher.cc',
       'src/node_symbols.cc',
       'src/node_task_queue.cc',
