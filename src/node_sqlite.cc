@@ -40,6 +40,7 @@ using v8::NewStringType;
 using v8::Null;
 using v8::Number;
 using v8::Object;
+using v8::Promise;
 using v8::SideEffectType;
 using v8::String;
 using v8::TryCatch;
@@ -531,6 +532,15 @@ void DatabaseSync::Exec(const FunctionCallbackInfo<Value>& args) {
   Utf8Value sql(env->isolate(), args[0].As<String>());
   int r = sqlite3_exec(db->connection_, *sql, nullptr, nullptr, nullptr);
   CHECK_ERROR_OR_THROW(env->isolate(), db->connection_, r, SQLITE_OK, void());
+}
+
+void DatabaseSync::Backup(const FunctionCallbackInfo<Value>& args) {
+  Environment* env = Environment::GetCurrent(args);
+  Local<Promise::Resolver> resolver = Promise::Resolver::New(env->context())
+                                          .ToLocalChecked()
+                                          .As<Promise::Resolver>();
+
+  args.GetReturnValue().Set(resolver->GetPromise());
 }
 
 void DatabaseSync::CustomFunction(const FunctionCallbackInfo<Value>& args) {
@@ -1718,6 +1728,7 @@ static void Initialize(Local<Object> target,
   SetProtoMethod(isolate, db_tmpl, "close", DatabaseSync::Close);
   SetProtoMethod(isolate, db_tmpl, "prepare", DatabaseSync::Prepare);
   SetProtoMethod(isolate, db_tmpl, "exec", DatabaseSync::Exec);
+  SetProtoMethod(isolate, db_tmpl, "backup", DatabaseSync::Backup);
   SetProtoMethod(isolate, db_tmpl, "function", DatabaseSync::CustomFunction);
   SetProtoMethod(
       isolate, db_tmpl, "createSession", DatabaseSync::CreateSession);
