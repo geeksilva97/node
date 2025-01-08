@@ -9,13 +9,19 @@
 #include "node_mem-inl.h"
 #include "sqlite3.h"
 #include "util-inl.h"
-
+#include <uv.h>
 #include <cinttypes>
+
+#include <chrono>
+#include <thread>
+#include <format>
+#include <iostream>
 
 namespace node {
 namespace sqlite {
 
 using v8::Array;
+using v8::HandleScope;
 using v8::ArrayBuffer;
 using v8::BigInt;
 using v8::Boolean;
@@ -41,6 +47,7 @@ using v8::Null;
 using v8::Number;
 using v8::Object;
 using v8::Promise;
+using v8::Persistent;
 using v8::SideEffectType;
 using v8::String;
 using v8::TryCatch;
@@ -534,6 +541,51 @@ void DatabaseSync::Exec(const FunctionCallbackInfo<Value>& args) {
   CHECK_ERROR_OR_THROW(env->isolate(), db->connection_, r, SQLITE_OK, void());
 }
 
+struct Work {
+  uv_work_t request;
+  Persistent<Promise::Resolver> resolver;
+  int result; // Some result from the async work
+};
+
+void DoWork(uv_work_t* req) {
+  Work* work = static_cast<Work*>(req->data);
+  work->result = 42; // Example result
+
+  std::thread::id this_id = std::this_thread::get_id();
+  std::ostringstream oss;
+  oss << this_id;
+  std::cout << "Believe it or not this is being executed in the thread pool (gotta sleep for 5 seconds)... id: " + oss.str() << std::endl;
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+}
+
+void AfterWork(uv_work_t* req, int status) {
+  Isolate* isolate = Isolate::GetCurrent();
+  HandleScope handle_scope(isolate);
+
+  Work* work = static_cast<Work*>(req->data);
+
+  std::thread::id this_id = std::this_thread::get_id();
+  std::ostringstream oss;
+  oss << this_id;
+  std::cout << "Finished work in the thread pool... id: " + oss.str() << std::endl;
+
+  // Retrieve the resolver
+  Local<Promise::Resolver> resolver = Local<Promise::Resolver>::New(isolate, work->resolver);
+
+  if (status == 0) {
+    // Resolve the promise with the result
+    resolver->Resolve(isolate->GetCurrentContext(), Integer::New(isolate, work->result)).Check();
+  } else {
+    // Reject the promise with an error
+    resolver->Reject(isolate->GetCurrentContext(), Exception::Error(String::NewFromUtf8(isolate, "Work failed").ToLocalChecked())).Check();
+  }
+
+  // Clean up
+  work->resolver.Reset();
+  delete work;
+}
+
 void DatabaseSync::Backup(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   Local<Promise::Resolver> resolver = Promise::Resolver::New(env->context())
@@ -541,6 +593,22 @@ void DatabaseSync::Backup(const FunctionCallbackInfo<Value>& args) {
                                           .As<Promise::Resolver>();
 
   args.GetReturnValue().Set(resolver->GetPromise());
+
+  // Allocate and initialize work
+  Work* work = new Work();
+  work->request.data = work;
+  work->resolver.Reset(env->isolate(), resolver);
+
+  std::thread::id this_id = std::this_thread::get_id();
+  std::ostringstream oss;
+  oss << this_id;
+  std::cout << "Gotta start a work in a thread different than id: " + oss.str() << std::endl;
+
+  // Queue the work
+  uv_queue_work(env->event_loop(), &work->request, DoWork, AfterWork);
+
+  /* resolver->Resolve(env->context(), Null(env->isolate())); */
+  /* resolver->Reject(env->context(), Null(env->isolate())); */
 }
 
 void DatabaseSync::CustomFunction(const FunctionCallbackInfo<Value>& args) {
