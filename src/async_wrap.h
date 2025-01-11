@@ -33,6 +33,7 @@ namespace node {
 
 #define NODE_ASYNC_NON_CRYPTO_PROVIDER_TYPES(V)                                \
   V(NONE)                                                                      \
+  V(SQLITE_BACKUP)                                                              \
   V(DIRHANDLE)                                                                 \
   V(DNSCHANNEL)                                                                \
   V(ELDHISTOGRAM)                                                              \

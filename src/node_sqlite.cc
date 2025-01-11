@@ -11,18 +11,16 @@
 #include "sqlite3.h"
 #include "util-inl.h"
 #include "threadpoolwork-inl.h"
+#include "uv.h"
+#include "util-inl.h"
 
 #include <cinttypes>
-
-#include <chrono>
-#include <thread>
-#include <format>
-#include <iostream>
 
 namespace node {
 namespace sqlite {
 
 using v8::Array;
+using v8::Signature;
 using v8::HandleScope;
 using v8::ArrayBuffer;
 using v8::BigInt;
@@ -137,103 +135,100 @@ inline void THROW_ERR_SQLITE_ERROR(Isolate* isolate, int errcode) {
   isolate->ThrowException(error);
 }
 
-class BackupJob: public ThreadPoolWork {
+// --------------------------
+
+class SQLiteBackup : public HandleWrap {
   public:
-    explicit BackupJob(Environment* env,
-        DatabaseSync* source,
-        Local<Promise::Resolver> resolver,
-        const char* source_db,
-        const char* destination_name,
-        const char* dest_db,
-        int pages,
-        int sleep,
-        Local<Function> progressFunc) : ThreadPoolWork(env, "node_sqlite3.BackupJob"),
-    env_(env),
-    /* progressFunc_(progressFunc), */
-    source_(source),
-    source_db_(source_db),
-    destination_name_(destination_name),
-    dest_db_(dest_db),
-    pages_(pages),
-    sleep_(sleep) {
-      resolver_.Reset(env->isolate(), resolver);
-      progressFunc_.Reset(env->isolate(), progressFunc);
-    }
-
-  void DoThreadPoolWork() override {
-    HandleScope handle_scope(env()->isolate());
-    sqlite3 *pDest;
-    sqlite3_backup *pBackup;
-
-    int rc = sqlite3_open(destination_name_.c_str(), &pDest);
-
-    if (rc != SQLITE_OK) {
-      sqlite3_close(pDest);
-      backup_status_ = -1;
-
-      return;
-    }
-
-    pBackup = sqlite3_backup_init(pDest, "main", source_->Connection(), source_db_.c_str());
-
-    if (pBackup == nullptr) {
-      sqlite3_close(pDest);
-      backup_status_ = -1;
-
-      return;
-    }
-
-    Local<Function> fn = Local<Function>::New(env()->isolate(), progressFunc_);
-
-    do {
-      rc = sqlite3_backup_step(pBackup, pages_);
-      /* fn->Call(env()->context(), Undefined(env()->isolate()), 0, nullptr); */
-
-
-      if (rc == SQLITE_OK || rc == SQLITE_BUSY || rc == SQLITE_LOCKED) {
-        sqlite3_sleep(sleep_);
-      }
-    } while (rc == SQLITE_OK || rc == SQLITE_BUSY || rc == SQLITE_LOCKED);
-
-    sqlite3_backup_finish(pBackup);
-    rc = sqlite3_errcode(pDest);
-
-    if (rc == SQLITE_OK) {
-      backup_status_ = 0;
-    } else {
-      backup_status_ = -1;
-    }
-
-    sqlite3_close(pDest);
-  }
-
-  void AfterThreadPoolWork(int status) override {
-    HandleScope handle_scope(env()->isolate());
-
-    if (!resolver_.IsEmpty()) {
-      Local<Promise::Resolver> resolver = Local<Promise::Resolver>::New(env()->isolate(), resolver_);
-      Local<String> message = String::NewFromUtf8(env()->isolate(), "Backup completed", NewStringType::kNormal).ToLocalChecked();
-
-      resolver->Resolve(env()->context(), message).ToChecked();
-    }
-  }
-
+    static void Initialize(Local<Object> target,
+        Local<Value> unused,
+        Local<Context> context,
+        void* priv);
+    static void RegisterExternalReferences(ExternalReferenceRegistry* registry);
+    static void New(const FunctionCallbackInfo<Value>& args);
+    static void Step(const FunctionCallbackInfo<Value>& args);
+    static void Finish(const FunctionCallbackInfo<Value>& args);
+    static Local<FunctionTemplate> GetConstructorTemplate(
+        Environment* env);
+    SET_NO_MEMORY_INFO()
+      SET_MEMORY_INFO_NAME(SQLiteBackup)
+      SET_SELF_SIZE(SQLiteBackup)
   private:
-  // https://github.com/nodejs/node/blob/649da3b8377e030ea7b9a1bc0308451e26e28740/src/crypto/crypto_keygen.h#L126
-  int backup_status_;
-
-  Environment* env() const { return env_; }
-
-  Environment* env_;
-  DatabaseSync* source_;
-  Global<Promise::Resolver> resolver_;
-  Global<Function> progressFunc_;
-  std::string source_db_;
-  std::string destination_name_;
-  std::string dest_db_;
-  int pages_;
-  int sleep_;
+      SQLiteBackup(Environment* env, Local<Object> object);
+      ~SQLiteBackup() override = default;
+      static void OnBackup(uv_work_t* req);
+      static void AfterBackup(uv_work_t* req, int status);
+      static void Callback(uv_timer_t* handle);
+      uv_handle_t handle_;
+      uv_timer_t timer_;
+      sqlite3_backup* backup_;
+      sqlite3* dest_db_;
+      sqlite3* source_db_;
 };
+
+SQLiteBackup::SQLiteBackup(Environment* env, Local<Object> object)
+  : HandleWrap(env,
+      object,
+      &handle_,
+      AsyncWrap::PROVIDER_SQLITE_BACKUP) {
+
+    CHECK_EQ(0, uv_timer_init(env->event_loop(), &timer_));
+  }
+
+void SQLiteBackup::Callback(uv_timer_t* handle) {
+  SQLiteBackup* wrap = ContainerOf(&SQLiteBackup::timer_, handle);
+  Environment* env = wrap->env();
+  HandleScope handle_scope(env->isolate());
+  Context::Scope context_scope(env->context());
+
+  Local<String> on_something =
+    String::NewFromUtf8(env->isolate(), "onsomething", NewStringType::kNormal)
+    .ToLocalChecked();
+
+  wrap->MakeCallback(on_something, 0, nullptr);
+}
+
+void SQLiteBackup::New(const FunctionCallbackInfo<Value>& args) {
+  Environment* env = Environment::GetCurrent(args);
+  new SQLiteBackup(env, args.This());
+}
+
+void SQLiteBackup::Step(const FunctionCallbackInfo<Value>& args) {
+
+  Environment* env = Environment::GetCurrent(args);
+  SQLiteBackup* wrap;
+  ASSIGN_OR_RETURN_UNWRAP(&wrap, args.This());
+  Local<String> message =
+    String::NewFromUtf8(env->isolate(), "hello world", NewStringType::kNormal)
+    .ToLocalChecked();
+
+  args.GetReturnValue().Set(message);
+
+  Local<String> on_something =
+    String::NewFromUtf8(env->isolate(), "onsomething", NewStringType::kNormal)
+    .ToLocalChecked();
+
+  uv_timer_start(&wrap->timer_, Callback, 1000, 1000);
+
+  wrap->MakeCallback(on_something, 0, nullptr);
+}
+
+Local<FunctionTemplate> SQLiteBackup::GetConstructorTemplate(
+    Environment* env) {
+  Isolate* isolate = env->isolate();
+  Local<FunctionTemplate> tmpl =
+    NewFunctionTemplate(isolate, SQLiteBackup::New);
+
+  tmpl->InstanceTemplate()->SetInternalFieldCount(
+      SQLiteBackup::kInternalFieldCount);
+
+  SetProtoMethod(isolate,
+                 tmpl,
+                 "step",
+                 SQLiteBackup::Step);
+
+  return tmpl;
+}
+// --------------------------
 
 class UserDefinedFunction {
  public:
@@ -649,17 +644,19 @@ void DatabaseSync::Backup(const FunctionCallbackInfo<Value>& args) {
                                           .As<Promise::Resolver>();
 
   Utf8Value destFilename(env->isolate(), args[0].As<String>());
-  Local<Object> options = args[1].As<Object>();
-  Local<String> progress_string = FIXED_ONE_BYTE_STRING(env->isolate(), "progress");
+  /* Local<Object> options = args[1].As<Object>(); */
+  /* Local<String> progress_string = FIXED_ONE_BYTE_STRING(env->isolate(), "progress"); */
 
-  Local<Value> progressValue =
-    options->Get(env->context(), progress_string).ToLocalChecked();
-  Local<Function> progressFunc = progressValue.As<Function>();
+  /* Local<Value> progressValue = */
+  /*   options->Get(env->context(), progress_string).ToLocalChecked(); */
+  /* Local<Function> progressFunc = progressValue.As<Function>(); */
+
+  /* progressFunc->Call(env->context(), Null(env->isolate()), 0, nullptr); */
 
   args.GetReturnValue().Set(resolver->GetPromise());
 
-  BackupJob* job = new BackupJob(env, db, resolver, "main", *destFilename, "main", 100, 250, progressFunc);
-  job->ScheduleWork();
+  /* BackupJob* job = new BackupJob(env, db, resolver, "main", *destFilename, "main", 100, 250); */
+  /* job->ScheduleWork(); */
 }
 
 void DatabaseSync::CustomFunction(const FunctionCallbackInfo<Value>& args) {
@@ -1864,6 +1861,10 @@ static void Initialize(Local<Object> target,
                          target,
                          "StatementSync",
                          StatementSync::GetConstructorTemplate(env));
+  SetConstructorFunction(context,
+                         target,
+                         "SQLiteBackup",
+                         SQLiteBackup::GetConstructorTemplate(env));
 
   target->Set(context, OneByteString(isolate, "constants"), constants).Check();
 }
