@@ -71,9 +71,6 @@
   V(__dirname_string, "__dirname")                                             \
   V(ack_string, "ack")                                                         \
   V(address_string, "address")                                                 \
-  V(total_pages_string, "totalPages")                                          \
-  V(remaining_pages_string, "remainingPages")                                  \
-  V(progress_string, "progress")                                               \
   V(aliases_string, "aliases")                                                 \
   V(alpn_callback_string, "ALPNCallback")                                      \
   V(args_string, "args")                                                       \
@@ -296,6 +293,7 @@
   V(primordials_string, "primordials")                                         \
   V(priority_string, "priority")                                               \
   V(process_string, "process")                                                 \
+  V(progress_string, "progress")                                               \
   V(promise_string, "promise")                                                 \
   V(prototype_string, "prototype")                                             \
   V(psk_string, "psk")                                                         \
@@ -309,6 +307,7 @@
   V(reason_string, "reason")                                                   \
   V(refresh_string, "refresh")                                                 \
   V(regexp_string, "regexp")                                                   \
+  V(remaining_pages_string, "remainingPages")                                  \
   V(rename_string, "rename")                                                   \
   V(replacement_string, "replacement")                                         \
   V(required_module_facade_url_string,                                         \
@@ -360,6 +359,7 @@
   V(time_to_first_byte_sent_string, "timeToFirstByteSent")                     \
   V(time_to_first_header_string, "timeToFirstHeader")                          \
   V(tls_ticket_string, "tlsTicket")                                            \
+  V(total_pages_string, "totalPages")                                          \
   V(transfer_string, "transfer")                                               \
   V(transfer_unsupported_type_str,                                             \
     "Cannot transfer object of unsupported type.")                             \
