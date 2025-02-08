@@ -1,5 +1,6 @@
 #include "node_sqlite.h"
 #include <path.h>
+#include "ada.h"
 #include "base_object-inl.h"
 #include "debug_utils-inl.h"
 #include "env-inl.h"
@@ -593,19 +594,24 @@ void DatabaseSync::New(const FunctionCallbackInfo<Value>& args) {
     return;
   }
 
-  if (!args[0]->IsString()) {
+  Local<Value> path = args[0];
+  if (!path->IsString() && !path->IsUint8Array()) {
     THROW_ERR_INVALID_ARG_TYPE(env->isolate(),
-                               "The \"path\" argument must be a string.");
+                               "The \"path\" argument must be a string, "
+                               "Uint8Array, or URL without null bytes.");
     return;
   }
 
   std::string location =
       Utf8Value(env->isolate(), args[0].As<String>()).ToString();
-  DatabaseOpenConfiguration open_config(std::move(location));
+  auto parsed_url = ada::parse<ada::url_aggregator>(location, nullptr);
+  if (parsed_url && parsed_url->type != ada::scheme::FILE) {
+    THROW_ERR_INVALID_URL_SCHEME(env->isolate());
+  }
 
+  DatabaseOpenConfiguration open_config(std::move(location));
   bool open = true;
   bool allow_load_extension = false;
-
   if (args.Length() > 1) {
     if (!args[1]->IsObject()) {
       THROW_ERR_INVALID_ARG_TYPE(env->isolate(),
