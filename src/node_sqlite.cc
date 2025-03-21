@@ -67,6 +67,42 @@ using v8::Value;
     }                                                                          \
   } while (0)
 
+#define SQLITE_VALUE_TO_JS(from, isolate, use_big_int_args, ...)               \
+  switch (sqlite3_##from##_type(__VA_ARGS__)) {                                \
+    case SQLITE_INTEGER:                                                       \
+      sqlite3_int64 val = sqlite3_##from##_int64(__VA_ARGS__);                 \
+      if (use_big_int_args) {                                                  \
+        return BigInt::New(isolate, val);                                      \
+      } else if (std::abs(val) <= kMaxSafeJsInteger) {                         \
+        return Number::New(isolate, val);                                      \
+      } else {                                                                 \
+        return Local<Value>();                                                 \
+      }                                                                        \
+      break;                                                                   \
+    case SQLITE_FLOAT:                                                         \
+      return Number::New(isolate, sqlite3_##from##_double(__VA_ARGS__));       \
+      break;                                                                   \
+    case SQLITE_TEXT: {                                                        \
+      const char* v =                                                          \
+          reinterpret_cast<const char*>(sqlite3_##from##_text(__VA_ARGS__));   \
+      return String::NewFromUtf8(isolate, v).As<Value>();                      \
+    } break;                                                                   \
+    case SQLITE_NULL:                                                          \
+      return Null(isolate);                                                    \
+      break;                                                                   \
+    case SQLITE_BLOB: {                                                        \
+      size_t size = static_cast<size_t>(sqlite3_##from##_bytes(__VA_ARGS__));  \
+      auto data = reinterpret_cast<const uint8_t*>(                            \
+          sqlite3_##from##_blob(__VA_ARGS__));                                 \
+      auto store = ArrayBuffer::NewBackingStore(isolate, size);                \
+      memcpy(store->Data(), data, size);                                       \
+      auto ab = ArrayBuffer::New(isolate, std::move(store));                   \
+      return Uint8Array::New(ab, 0, size);                                     \
+    } break;                                                                   \
+    default:                                                                   \
+      return nullptr;                                                          \
+  }
+
 inline MaybeLocal<Object> CreateSQLiteError(Isolate* isolate,
                                             const char* message) {
   Local<String> js_msg;
