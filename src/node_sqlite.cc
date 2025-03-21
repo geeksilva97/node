@@ -105,15 +105,15 @@ using v8::Value;
   }
 
 MaybeLocal<Value> SQLiteValueToJS(Isolate* isolate,
-                                  sqlite3_value* sqlite_value,
-                                  bool use_big_int_args) {
+                                  bool use_big_int_args,
+                                  sqlite3_value* sqlite_value) {
   SQLITE_VALUE_TO_JS(value, isolate, use_big_int_args, sqlite_value);
 }
 
 MaybeLocal<Value> SQLiteValueToJS(Isolate* isolate,
+                                  bool use_big_int_args,
                                   sqlite3_stmt* stmt,
-                                  int column,
-                                  bool use_big_int_args) {
+                                  int column) {
   SQLITE_VALUE_TO_JS(column, isolate, use_big_int_args, stmt, column);
 }
 
@@ -658,7 +658,7 @@ void UserDefinedFunction::xFunc(sqlite3_context* ctx,
   for (int i = 0; i < argc; ++i) {
     sqlite3_value* value = argv[i];
     MaybeLocal<Value> js_val =
-        SQLiteValueToJS(isolate, value, self->use_bigint_args_);
+        SQLiteValueToJS(isolate, self->use_bigint_args_, value);
 
     if (js_val.IsEmpty()) {
       // Ignore the SQLite error because a JavaScript exception is pending.
@@ -1944,56 +1944,16 @@ bool StatementSync::BindValue(const Local<Value>& value, const int index) {
 MaybeLocal<Value> StatementSync::ColumnToValue(const int column) {
   Isolate* isolate = env()->isolate();
   MaybeLocal<Value> js_val =
-    SQLiteValueToJS(isolate, statement_, column, use_big_ints_);
+    SQLiteValueToJS(isolate, use_big_ints_, statement_, column);
 
   if (js_val.IsEmpty()) {
-    THROW_ERR_OUT_OF_RANGE(env()->isolate(),
+    THROW_ERR_OUT_OF_RANGE(isolate,
         "The value of column %d is too large to be "
         "represented as a JavaScript number: %" PRId64,
         column,
         sqlite3_column_int64(statement_, column));
     return MaybeLocal<Value>();
   }
-
-  /* switch (sqlite3_column_type(statement_, column)) { */
-  /*   case SQLITE_INTEGER: { */
-  /*     sqlite3_int64 value = sqlite3_column_int64(statement_, column); */
-  /*     if (use_big_ints_) { */
-  /*       return BigInt::New(env()->isolate(), value); */
-  /*     } else if (std::abs(value) <= kMaxSafeJsInteger) { */
-  /*       return Number::New(env()->isolate(), value); */
-  /*     } else { */
-  /*       THROW_ERR_OUT_OF_RANGE(env()->isolate(), */
-  /*                              "The value of column %d is too large to be " */
-  /*                              "represented as a JavaScript number: %" PRId64, */
-  /*                              column, */
-  /*                              value); */
-  /*       return MaybeLocal<Value>(); */
-  /*     } */
-  /*   } */
-  /*   case SQLITE_FLOAT: */
-  /*     return Number::New(env()->isolate(), */
-  /*                        sqlite3_column_double(statement_, column)); */
-  /*   case SQLITE_TEXT: { */
-  /*     const char* value = reinterpret_cast<const char*>( */
-  /*         sqlite3_column_text(statement_, column)); */
-  /*     return String::NewFromUtf8(env()->isolate(), value).As<Value>(); */
-  /*   } */
-  /*   case SQLITE_NULL: */
-  /*     return Null(env()->isolate()); */
-  /*   case SQLITE_BLOB: { */
-  /*     size_t size = */
-  /*         static_cast<size_t>(sqlite3_column_bytes(statement_, column)); */
-  /*     auto data = reinterpret_cast<const uint8_t*>( */
-  /*         sqlite3_column_blob(statement_, column)); */
-  /*     auto store = ArrayBuffer::NewBackingStore(env()->isolate(), size); */
-  /*     memcpy(store->Data(), data, size); */
-  /*     auto ab = ArrayBuffer::New(env()->isolate(), std::move(store)); */
-  /*     return Uint8Array::New(ab, 0, size); */
-  /*   } */
-  /*   default: */
-  /*     UNREACHABLE("Bad SQLite column type"); */
-  /* } */
 }
 
 MaybeLocal<Name> StatementSync::ColumnNameToName(const int column) {
