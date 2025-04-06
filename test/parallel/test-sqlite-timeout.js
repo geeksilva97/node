@@ -37,7 +37,7 @@ test('connection can perform queries when lock is released before the timeout', 
   });
 });
 
-test('trhows if lock is holden longer than the provided timeout', (t, done) => {
+test('throws if lock is held longer than the provided timeout', (t, done) => {
   const databasePath = nextDb();
   const conn = new DatabaseSync(databasePath, { timeout: 800 });
   t.after(() => { conn.close(); });
