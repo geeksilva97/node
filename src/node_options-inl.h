@@ -446,6 +446,20 @@ void OptionsParser<Options>::Parse(
       }
     }
 
+    // Parse when --inspect is aliased to --inspect-port with value being true
+    // or false
+    if (original_name == "--inspect=" && name == "--inspect-port") {
+      if (value == "true") {
+        // --inspect-port=true is equivalent to --inspect
+        continue;
+      }
+
+      if (value == "false") {
+        // Removes --inspect from synthetic args
+        args.pop_first();
+      }
+    }
+
     switch (info.type) {
       case kBoolean:
         *Lookup<bool>(info.field, options) = !is_negation;
