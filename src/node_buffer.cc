@@ -94,6 +94,7 @@ class BufferReader : public BaseObject {
  public:
   BufferReader(Environment* env, Local<Object> object, Local<Uint8Array> buffer)
       : BaseObject(env, object) {
+        MakeWeak();
     buffer_.Reset(env->isolate(), buffer);
   }
 
@@ -129,10 +130,10 @@ class BufferReader : public BaseObject {
       total_bytes = byteLength - buff_reader->position_;
     }
 
-    if (total_bytes <= 0) {
-      args.GetReturnValue().Set(0);
-      return;
-    }
+    /* if (total_bytes <= 0) { */
+    /*   args.GetReturnValue().Set(0); */
+    /*   return; */
+    /* } */
 
     auto array_buffer = buffer->Buffer();
     size_t byte_offset = buffer->ByteOffset();
@@ -205,7 +206,7 @@ class BufferReader : public BaseObject {
 
   void set_position(size_t position) { position_ = position; }
 
-  size_t get_position() { position_; }
+  size_t get_position() { return position_; }
 
   Local<Uint8Array> get_buffer() { return buffer_.Get(env()->isolate()); }
 
