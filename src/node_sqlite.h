@@ -112,6 +112,32 @@ class DatabaseSync : public BaseObject {
   friend class Session;
 };
 
+class Statement : public BaseObject {
+ public:
+  Statement(Environment* env,
+            v8::Local<v8::Object> object,
+            BaseObjectPtr<DatabaseSync> db,
+            sqlite3_stmt* stmt,
+            bool async);
+  void MemoryInfo(MemoryTracker* tracker) const override;
+  static v8::Local<v8::FunctionTemplate> GetConstructorTemplate(
+      Environment* env);
+  static void Run(const v8::FunctionCallbackInfo<v8::Value>& args);
+  bool BindValue(const v8::Local<v8::Value>& value, const int index);
+  bool BindParams(const v8::FunctionCallbackInfo<v8::Value>& args);
+  bool IsFinalized();
+
+ private:
+  BaseObjectPtr<DatabaseSync> db_;
+  bool async_;
+  sqlite3_stmt* statement_ = nullptr;
+  bool return_arrays_ = false;
+  bool use_big_ints_;
+  bool allow_bare_named_params_;
+  bool allow_unknown_named_params_;
+  std::optional<std::map<std::string, std::string>> bare_named_params_;
+};
+
 class StatementSync : public BaseObject {
  public:
   StatementSync(Environment* env,
