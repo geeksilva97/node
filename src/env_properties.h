@@ -456,6 +456,7 @@
   V(secure_context_constructor_template, v8::FunctionTemplate)                 \
   V(shutdown_wrap_template, v8::ObjectTemplate)                                \
   V(socketaddress_constructor_template, v8::FunctionTemplate)                  \
+  V(sqlite_statement_constructor_template, v8::FunctionTemplate)               \
   V(sqlite_statement_sync_constructor_template, v8::FunctionTemplate)          \
   V(sqlite_statement_sync_iterator_constructor_template, v8::FunctionTemplate) \
   V(sqlite_session_constructor_template, v8::FunctionTemplate)                 \
