@@ -50,6 +50,7 @@ class DatabaseOpenConfiguration {
 class StatementSync;
 class Statement;
 class BackupJob;
+class SQLiteAsyncWork;
 
 class DatabaseSync : public BaseObject {
  public:
@@ -144,6 +145,7 @@ class Statement : public BaseObject {
   bool use_big_ints_;
   bool allow_bare_named_params_;
   bool allow_unknown_named_params_;
+  std::set<SQLiteAsyncWork*> async_tasks_;
   std::optional<std::map<std::string, std::string>> bare_named_params_;
 };
 

@@ -429,7 +429,7 @@ class SQLiteAsyncWork : public ThreadPoolWork {
   explicit SQLiteAsyncWork(Environment* env,
                            DatabaseSync* db,
                            Local<Promise::Resolver> resolver,
-                           std::function<int()> work,
+                           std::function<MaybeLocal<Value>()> work,
                            std::function<void()> after)
       : ThreadPoolWork(env, "node_sqlite_async"),
         env_(env),
@@ -441,17 +441,18 @@ class SQLiteAsyncWork : public ThreadPoolWork {
 
   void DoThreadPoolWork() override {
     if (work_) {
-      work_status_ = work_();
+      result_ = work_();
     }
   }
 
   void AfterThreadPoolWork(int status) override {
     Isolate* isolate = env_->isolate();
     HandleScope handle_scope(isolate);
+    Local<Value> result;
     Local<Promise::Resolver> resolver =
         Local<Promise::Resolver>::New(isolate, resolver_);
 
-    if (work_status_ != 0) {
+    if (!result_.ToLocal(&result)) {
       // create sqlite error and put in the rejection
       resolver->Reject(env_->context(), Null(isolate)).ToChecked();
       return;
@@ -464,9 +465,9 @@ class SQLiteAsyncWork : public ThreadPoolWork {
   Environment* env_;
   DatabaseSync* db_;
   Global<Promise::Resolver> resolver_;
-  std::function<int()> work_ = nullptr;
+  std::function<MaybeLocal<Value>()> work_ = nullptr;
   std::function<void()> after_ = nullptr;
-  int work_status_ = 0;
+  MaybeLocal<Value> result_;
 };
 
 class BackupJob : public ThreadPoolWork {
@@ -2186,7 +2187,7 @@ Statement::Statement(Environment* env,
                      BaseObjectPtr<DatabaseSync> db,
                      sqlite3_stmt* stmt,
                      bool async)
-    : BaseObject(env, object), db_(std::move(db)) {
+    : BaseObject(env, object), db_(std::move(db)), async_(async) {
   MakeWeak();
   statement_ = stmt;
   // In the future, some of these options could be set at the database
@@ -2351,16 +2352,17 @@ void Statement::Run(const FunctionCallbackInfo<Value>& args) {
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
 
-  auto task = [args, stmt, env]() -> Local<Value> {
+  auto task = [args, stmt, env]() -> MaybeLocal<Value> {
     int r = sqlite3_reset(stmt->statement_);
     /* CHECK_ERROR_OR_THROW(env->isolate(), stmt->db_.get(), r, SQLITE_OK,
      * void()); */
     if (r != SQLITE_OK) {
-      return Local<Value>();
+      THROW_ERR_SQLITE_ERROR(env->isolate(), r);
+      return MaybeLocal<Value>();
     }
 
     if (!stmt->BindParams(args)) {
-      return Local<Value>();
+      return MaybeLocal<Value>();
     }
 
     sqlite3_step(stmt->statement_);
@@ -2368,7 +2370,8 @@ void Statement::Run(const FunctionCallbackInfo<Value>& args) {
     /* CHECK_ERROR_OR_THROW(env->isolate(), stmt->db_.get(), r, SQLITE_OK,
      * void()); */
     if (r != SQLITE_OK) {
-      return Local<Value>();
+      THROW_ERR_SQLITE_ERROR(env->isolate(), r);
+      return MaybeLocal<Value>();
     }
     Local<Object> result = Object::New(env->isolate());
     sqlite3_int64 last_insert_rowid =
@@ -2392,11 +2395,31 @@ void Statement::Run(const FunctionCallbackInfo<Value>& args) {
             .IsNothing() ||
         result->Set(env->context(), env->changes_string(), changes_val)
             .IsNothing()) {
-      return Local<Value>();
+      return MaybeLocal<Value>();
     }
 
-    return result;
+    return MaybeLocal<Object>(result);
   };
+
+  if (!stmt->async_) {
+    Local<Value> result;
+    if (!task().ToLocal(&result)) {
+      return;
+    }
+
+    args.GetReturnValue().Set(result);
+    return;
+  }
+
+  Local<Promise::Resolver> resolver;
+  if (!Promise::Resolver::New(env->context()).ToLocal(&resolver)) {
+    return;
+  }
+
+  args.GetReturnValue().Set(resolver->GetPromise());
+  // TODO(myself): todo: save work somewhere for cleaning it up
+  SQLiteAsyncWork *work = new SQLiteAsyncWork(env, stmt->db_.get(), resolver, task, nullptr);
+  work->DoThreadPoolWork();
 }
 
 void StatementSync::Run(const FunctionCallbackInfo<Value>& args) {
@@ -2641,6 +2664,7 @@ Local<FunctionTemplate> Statement::GetConstructorTemplate(Environment* env) {
     tmpl->SetClassName(FIXED_ONE_BYTE_STRING(isolate, "Statement"));
     tmpl->InstanceTemplate()->SetInternalFieldCount(
         Statement::kInternalFieldCount);
+    SetProtoMethod(isolate, tmpl, "run", Statement::Run);
     env->set_sqlite_statement_constructor_template(tmpl);
   }
   return tmpl;
