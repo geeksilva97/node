@@ -2,6 +2,8 @@
 #include "env-inl.h"
 #include "node.h"
 #include "node_snapshot_builder.h"
+#include <cstdio>
+#include <iostream>
 
 using v8::Context;
 using v8::Function;
@@ -20,6 +22,7 @@ using v8::TryCatch;
 namespace node {
 
 Maybe<ExitCode> SpinEventLoopInternal(Environment* env) {
+  std::cout << "\tgotta spin event loop" << std::endl;
   CHECK_NOT_NULL(env);
   MultiIsolatePlatform* platform = GetMultiIsolatePlatform(env);
   CHECK_NOT_NULL(platform);
@@ -38,10 +41,13 @@ Maybe<ExitCode> SpinEventLoopInternal(Environment* env) {
         node::performance::NODE_PERFORMANCE_MILESTONE_LOOP_START);
     do {
       if (env->is_stopping()) break;
+      std::cout << "node called uv_run() in SpinEventLoopInternal with UV_RUN_DEFAULT: " << env->event_loop() << std::endl;
       uv_run(env->event_loop(), UV_RUN_DEFAULT);
       if (env->is_stopping()) break;
 
+      std::cout << "Gotta drain tasks" << std::endl;
       platform->DrainTasks(isolate);
+      std::cout << "Should have drained all tasks" << std::endl;
 
       more = uv_loop_alive(env->event_loop());
       if (more && !env->is_stopping()) continue;
@@ -66,6 +72,7 @@ Maybe<ExitCode> SpinEventLoopInternal(Environment* env) {
   if (env->is_stopping()) return Nothing<ExitCode>();
 
   env->set_trace_sync_io(false);
+  std::cout << "did i get here? " << env->is_stopping() << std::endl;
   // Clear the serialize callback even though the JS-land queue should
   // be empty this point so that the deserialized instance won't
   // attempt to call into JS again.
@@ -247,8 +254,10 @@ CommonEnvironmentSetup::~CommonEnvironmentSetup() {
     impl_->platform->DisposeIsolate(isolate);
 
     // Wait until the platform has cleaned up all relevant resources.
-    while (!platform_finished)
+    while (!platform_finished) {
       uv_run(&impl_->loop, UV_RUN_ONCE);
+      std::cout << "node (CommonEnvironmentSetup) called uv_run() in with UV_RUN_ONCE\n";
+    }
   }
 
   if (impl_->isolate || impl_->loop.data != nullptr)

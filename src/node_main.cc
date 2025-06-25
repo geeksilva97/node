@@ -21,6 +21,7 @@
 
 #include "node.h"
 #include <cstdio>
+#include <iostream>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -94,6 +95,8 @@ int wmain(int argc, wchar_t* wargv[]) {
 // UNIX
 
 int main(int argc, char* argv[]) {
+  std::cout << "OMG, this is where Node starts!!\n";
+
   return node::Start(argc, argv);
 }
 #endif

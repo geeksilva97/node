@@ -536,6 +536,8 @@ MaybeLocal<Value> LoadEnvironment(Environment* env,
   }
   env->InitializeCompileCache();
 
+  std::cout << "Gotta StartExecution" << std::endl;
+
   return StartExecution(env, cb);
 }
 

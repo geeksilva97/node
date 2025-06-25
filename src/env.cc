@@ -1047,6 +1047,7 @@ Environment::~Environment() {
 void Environment::InitializeLibuv() {
   HandleScope handle_scope(isolate());
   Context::Scope context_scope(context());
+  std::cout << "initialize libuv" << std::endl;
 
   CHECK_EQ(0, uv_timer_init(event_loop(), timer_handle()));
   uv_unref(reinterpret_cast<uv_handle_t*>(timer_handle()));
@@ -1209,6 +1210,11 @@ void Environment::CleanupHandles() {
   while (handle_cleanup_waiting_ != 0 ||
          request_waiting_ != 0 ||
          !handle_wrap_queue_.IsEmpty()) {
+    std::cout << "WTF, i am calling uv_run again" << std::endl;
+    std::cout << "\thandle_cleanup_waiting_: " << handle_cleanup_waiting_
+              << ", request_waiting_: " << request_waiting_
+              << ", handle_wrap_queue_.IsEmpty(): " << handle_wrap_queue_.IsEmpty()
+              << std::endl;
     uv_run(event_loop(), UV_RUN_ONCE);
   }
 }

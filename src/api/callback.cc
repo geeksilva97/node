@@ -145,6 +145,7 @@ void InternalCallbackScope::Close() {
 
   Local<Context> context = env_->context();
   if (!tick_info->has_tick_scheduled()) {
+    std::cout << "No tick scheduled, draining microtask queue" << std::endl;
     context->GetMicrotaskQueue()->PerformCheckpoint(isolate);
 
     perform_stopping_check();
@@ -167,6 +168,7 @@ void InternalCallbackScope::Close() {
   if (!env_->can_call_into_js()) return;
 
   Local<Function> tick_callback = env_->tick_callback_function();
+  std::cout << "Tick callback being called from C++" << std::endl;
 
   // The tick is triggered before JS land calls SetTickCallback
   // to initializes the tick callback during bootstrap.

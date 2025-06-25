@@ -128,6 +128,7 @@ void PromiseRejectCallback(PromiseRejectMessage message) {
 namespace task_queue {
 
 static void EnqueueMicrotask(const FunctionCallbackInfo<Value>& args) {
+  std::cout << "EnqueueMicrotask called" << std::endl;
   Environment* env = Environment::GetCurrent(args);
   Isolate* isolate = env->isolate();
 
@@ -139,6 +140,7 @@ static void EnqueueMicrotask(const FunctionCallbackInfo<Value>& args) {
 
 static void RunMicrotasks(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
+  std::cout << "RunMicrotasks called" << std::endl;
   env->context()->GetMicrotaskQueue()->PerformCheckpoint(env->isolate());
 }
 

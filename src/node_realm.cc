@@ -177,6 +177,7 @@ void Realm::DeserializeProperties(const RealmSerializeInfo* info) {
 MaybeLocal<Value> Realm::ExecuteBootstrapper(const char* id) {
   EscapableHandleScope scope(isolate());
   Local<Context> ctx = context();
+
   MaybeLocal<Value> result =
       env()->builtin_loader()->CompileAndCall(ctx, id, this);
 

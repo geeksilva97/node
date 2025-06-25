@@ -27,6 +27,7 @@
 #include "node_external_reference.h"
 #include "tracing/traced_value.h"
 #include "util-inl.h"
+#include <iostream>
 
 #include "v8.h"
 
@@ -662,6 +663,7 @@ void AsyncWrap::EmitAsyncInit(Environment* env,
 MaybeLocal<Value> AsyncWrap::MakeCallback(const Local<Function> cb,
                                           int argc,
                                           Local<Value>* argv) {
+  std::cout << "MakeCallback was called in node" << std::endl;
   EmitTraceEventBefore();
 
   ProviderType provider = provider_type();

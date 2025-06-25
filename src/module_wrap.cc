@@ -9,6 +9,7 @@
 #include "node_process-inl.h"
 #include "node_watchdog.h"
 #include "util-inl.h"
+#include <iostream>
 
 #include <sys/stat.h>  // S_IFDIR
 
@@ -601,8 +602,10 @@ void ModuleWrap::Evaluate(const FunctionCallbackInfo<Value>& args) {
   MaybeLocal<Value> result;
   auto run = [&]() {
     MaybeLocal<Value> result = module->Evaluate(context);
-    if (!result.IsEmpty() && microtask_queue)
+    if (!result.IsEmpty() && microtask_queue) {
+      std::cout << "draining microtasks after module evaluation" << std::endl;
       microtask_queue->PerformCheckpoint(isolate);
+    }
     return result;
   };
   if (break_on_sigint && timeout != -1) {

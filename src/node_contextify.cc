@@ -35,6 +35,7 @@
 #include "node_url.h"
 #include "node_watchdog.h"
 #include "util-inl.h"
+#include <iostream>
 
 namespace node {
 namespace contextify {
@@ -1299,8 +1300,10 @@ bool ContextifyScript::EvalMachine(Local<Context> context,
   bool received_signal = false;
   auto run = [&]() {
     MaybeLocal<Value> result = script->Run(context);
-    if (!result.IsEmpty() && mtask_queue != nullptr)
+    if (!result.IsEmpty() && mtask_queue != nullptr) {
+      std::cout << "draining microtasks in node_contextify" << std::endl;
       mtask_queue->PerformCheckpoint(env->isolate());
+    }
     return result;
   };
   if (break_on_sigint && timeout != -1) {
@@ -1706,6 +1709,7 @@ static MaybeLocal<Function> CompileFunctionForCJSLoader(
       // TODO(joyeecheung): allow optional eager compilation.
       options);
 
+  std::cout << "Compiled script on C++ side" << std::endl;
   Local<Function> fn;
   if (!maybe_fn.ToLocal(&fn)) {
     return scope.EscapeMaybe(MaybeLocal<Function>());

@@ -18,6 +18,8 @@
 #include <sanitizer/lsan_interface.h>
 #endif
 
+#include <iostream>
+
 #if HAVE_INSPECTOR
 #include "inspector/worker_inspector.h"  // ParentInspectorHandle
 #endif
@@ -101,6 +103,7 @@ ExitCode NodeMainInstance::Run() {
 }
 
 void NodeMainInstance::Run(ExitCode* exit_code, Environment* env) {
+  std::cout << "gotta run something" << std::endl;
   if (*exit_code == ExitCode::kNoFailure) {
     if (!sea::MaybeLoadSingleExecutableApplication(env)) {
       LoadEnvironment(env, StartExecutionCallback{});
