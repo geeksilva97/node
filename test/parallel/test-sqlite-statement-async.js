@@ -17,6 +17,8 @@ const db = new DatabaseSync(':memory:');
 db.exec(`CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT);`);
 
 db.prepare('INSERT INTO test (name) VALUES (?);').run('Sync stuff');
+// below an example to test failure: constraint violation
+// const p = db.prepare(`INSERT INTO test (id, name) VALUES (1, ?);`, true).run('Async stuff');
 const p = db.prepare(`INSERT INTO test (name) VALUES (?);`, true).run('Async stuff');
 
 p.then((result) => {

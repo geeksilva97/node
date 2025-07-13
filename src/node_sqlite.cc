@@ -1078,6 +1078,7 @@ void DatabaseSync::Prepare(const FunctionCallbackInfo<Value>& args) {
   int r = sqlite3_prepare_v2(db->connection_, *sql, -1, &s, 0);
   CHECK_ERROR_OR_THROW(env->isolate(), db, r, SQLITE_OK, void());
 
+  // remove this if condition once all the statement operations are implemented in the Statement class
   if (async) {
     BaseObjectPtr<Statement> stmt =
         Statement::Create(env, BaseObjectPtr<DatabaseSync>(db), s, async);
@@ -2365,8 +2366,18 @@ void Statement::Run(const FunctionCallbackInfo<Value>& args) {
     return;
   }
 
-  auto after = [env, stmt](int sqlite_status, Local<Promise::Resolver> resolver) {
-    // TODO: handle error if sqlite_status != SQLITE_OK
+  auto after = [env, stmt](int sqlite_status,
+                           Local<Promise::Resolver> resolver) {
+    if (sqlite_status != SQLITE_OK) {
+      Isolate* isolate = env->isolate();
+      Local<Object> e;
+      if (!CreateSQLiteError(isolate, sqlite_status).ToLocal(&e)) {
+        return;
+      }
+      resolver->Reject(env->context(), e);
+      return;
+    }
+
     Local<Object> result = Object::New(env->isolate());
     sqlite3_int64 last_insert_rowid =
         sqlite3_last_insert_rowid(stmt->db_->Connection());
@@ -2393,7 +2404,7 @@ void Statement::Run(const FunctionCallbackInfo<Value>& args) {
     }
 
     resolver->Resolve(env->context(), result);
- };
+  };
 
   Local<Promise::Resolver> resolver;
   if (!Promise::Resolver::New(env->context()).ToLocal(&resolver)) {
