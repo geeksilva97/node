@@ -2348,9 +2348,15 @@ void Statement::Run(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  int r = sqlite3_reset(stmt->statement_);
+  CHECK_ERROR_OR_THROW(env->isolate(), stmt->db_.get(), r, SQLITE_OK, void());
+  if (!stmt->BindParams(args)) {
+    return;
+  }
 
   auto task = [args, stmt, env]() -> int {
-    return -69;
+    sqlite3_step(stmt->statement_);
+    return sqlite3_reset(stmt->statement_);
   };
 
   if (!stmt->async_) {
@@ -2359,24 +2365,34 @@ void Statement::Run(const FunctionCallbackInfo<Value>& args) {
     return;
   }
 
-  auto after = [env](int sqlite_status, Local<Promise::Resolver> resolver) {
-    Local<String> message;
+  auto after = [env, stmt](int sqlite_status, Local<Promise::Resolver> resolver) {
+    // TODO: handle error if sqlite_status != SQLITE_OK
+    Local<Object> result = Object::New(env->isolate());
+    sqlite3_int64 last_insert_rowid =
+        sqlite3_last_insert_rowid(stmt->db_->Connection());
+    sqlite3_int64 changes = sqlite3_changes64(stmt->db_->Connection());
+    Local<Value> last_insert_rowid_val;
+    Local<Value> changes_val;
 
-    if (sqlite_status != SQLITE_OK) {
-      if (String::NewFromUtf8(env->isolate(), "Something went really wrong")
-              .ToLocal(&message)) {
-        resolver->Reject(env->context(), message);
-        return;
-      }
+    if (stmt->use_big_ints_) {
+      last_insert_rowid_val = BigInt::New(env->isolate(), last_insert_rowid);
+      changes_val = BigInt::New(env->isolate(), changes);
+    } else {
+      last_insert_rowid_val = Number::New(env->isolate(), last_insert_rowid);
+      changes_val = Number::New(env->isolate(), changes);
     }
 
-    if (!String::NewFromUtf8(env->isolate(), "SQLite operation completed")
-             .ToLocal(&message)) {
-      resolver->Reject(env->context(), Undefined(env->isolate()));
+    if (result
+        ->Set(env->context(),
+          env->last_insert_rowid_string(),
+          last_insert_rowid_val)
+        .IsNothing() ||
+        result->Set(env->context(), env->changes_string(), changes_val)
+        .IsNothing()) {
       return;
     }
 
-    resolver->Resolve(env->context(), message);
+    resolver->Resolve(env->context(), result);
  };
 
   Local<Promise::Resolver> resolver;
