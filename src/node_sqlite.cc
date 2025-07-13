@@ -426,11 +426,13 @@ class CustomAggregate {
 
 class SQLiteAsyncWork : public ThreadPoolWork {
  public:
-  explicit SQLiteAsyncWork(Environment* env,
-                           DatabaseSync* db,
-                           Local<Promise::Resolver> resolver,
-                           std::function<MaybeLocal<Value>()> work,
-                           std::function<void()> after)
+  explicit SQLiteAsyncWork(
+      Environment* env,
+      DatabaseSync* db,
+      Local<Promise::Resolver> resolver,
+      std::function<int()> work,  // the work will always return a status code
+                                  // (that is the SQLite thing)
+      std::function<void(int, Local<Promise::Resolver>)> after)
       : ThreadPoolWork(env, "node_sqlite_async"),
         env_(env),
         db_(db),
@@ -448,26 +450,21 @@ class SQLiteAsyncWork : public ThreadPoolWork {
   void AfterThreadPoolWork(int status) override {
     Isolate* isolate = env_->isolate();
     HandleScope handle_scope(isolate);
-    Local<Value> result;
     Local<Promise::Resolver> resolver =
         Local<Promise::Resolver>::New(isolate, resolver_);
 
-    if (!result_.ToLocal(&result)) {
-      // create sqlite error and put in the rejection
-      resolver->Reject(env_->context(), Null(isolate)).ToChecked();
-      return;
+    if (after_) {
+      after_(result_, resolver);
     }
-
-    resolver->Resolve(env()->context(), Undefined(isolate)).ToChecked();
   }
 
  private:
   Environment* env_;
   DatabaseSync* db_;
   Global<Promise::Resolver> resolver_;
-  std::function<MaybeLocal<Value>()> work_ = nullptr;
-  std::function<void()> after_ = nullptr;
-  MaybeLocal<Value> result_;
+  std::function<int()> work_ = nullptr;
+  std::function<void(int, Local<Promise::Resolver>)> after_ = nullptr;
+  int result_;
 };
 
 class BackupJob : public ThreadPoolWork {
@@ -2352,64 +2349,35 @@ void Statement::Run(const FunctionCallbackInfo<Value>& args) {
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
 
-  auto task = [args, stmt, env]() -> MaybeLocal<Value> {
-    int r = sqlite3_reset(stmt->statement_);
-    /* CHECK_ERROR_OR_THROW(env->isolate(), stmt->db_.get(), r, SQLITE_OK,
-     * void()); */
-    if (r != SQLITE_OK) {
-      THROW_ERR_SQLITE_ERROR(env->isolate(), r);
-      return MaybeLocal<Value>();
-    }
-
-    if (!stmt->BindParams(args)) {
-      return MaybeLocal<Value>();
-    }
-
-    sqlite3_step(stmt->statement_);
-    r = sqlite3_reset(stmt->statement_);
-    /* CHECK_ERROR_OR_THROW(env->isolate(), stmt->db_.get(), r, SQLITE_OK,
-     * void()); */
-    if (r != SQLITE_OK) {
-      THROW_ERR_SQLITE_ERROR(env->isolate(), r);
-      return MaybeLocal<Value>();
-    }
-    Local<Object> result = Object::New(env->isolate());
-    sqlite3_int64 last_insert_rowid =
-        sqlite3_last_insert_rowid(stmt->db_->Connection());
-    sqlite3_int64 changes = sqlite3_changes64(stmt->db_->Connection());
-    Local<Value> last_insert_rowid_val;
-    Local<Value> changes_val;
-
-    if (stmt->use_big_ints_) {
-      last_insert_rowid_val = BigInt::New(env->isolate(), last_insert_rowid);
-      changes_val = BigInt::New(env->isolate(), changes);
-    } else {
-      last_insert_rowid_val = Number::New(env->isolate(), last_insert_rowid);
-      changes_val = Number::New(env->isolate(), changes);
-    }
-
-    if (result
-            ->Set(env->context(),
-                  env->last_insert_rowid_string(),
-                  last_insert_rowid_val)
-            .IsNothing() ||
-        result->Set(env->context(), env->changes_string(), changes_val)
-            .IsNothing()) {
-      return MaybeLocal<Value>();
-    }
-
-    return MaybeLocal<Object>(result);
+  auto task = [args, stmt, env]() -> int {
+    return -69;
   };
 
   if (!stmt->async_) {
-    Local<Value> result;
-    if (!task().ToLocal(&result)) {
+    int r = task();
+    args.GetReturnValue().Set(Integer::New(env->isolate(), r));
+    return;
+  }
+
+  auto after = [env](int sqlite_status, Local<Promise::Resolver> resolver) {
+    Local<String> message;
+
+    if (sqlite_status != SQLITE_OK) {
+      if (String::NewFromUtf8(env->isolate(), "Something went really wrong")
+              .ToLocal(&message)) {
+        resolver->Reject(env->context(), message);
+        return;
+      }
+    }
+
+    if (!String::NewFromUtf8(env->isolate(), "SQLite operation completed")
+             .ToLocal(&message)) {
+      resolver->Reject(env->context(), Undefined(env->isolate()));
       return;
     }
 
-    args.GetReturnValue().Set(result);
-    return;
-  }
+    resolver->Resolve(env->context(), message);
+ };
 
   Local<Promise::Resolver> resolver;
   if (!Promise::Resolver::New(env->context()).ToLocal(&resolver)) {
@@ -2418,8 +2386,8 @@ void Statement::Run(const FunctionCallbackInfo<Value>& args) {
 
   args.GetReturnValue().Set(resolver->GetPromise());
   // TODO(myself): todo: save work somewhere for cleaning it up
-  SQLiteAsyncWork *work = new SQLiteAsyncWork(env, stmt->db_.get(), resolver, task, nullptr);
-  work->DoThreadPoolWork();
+  SQLiteAsyncWork *work = new SQLiteAsyncWork(env, stmt->db_.get(), resolver, task, after);
+  work->ScheduleWork();
 }
 
 void StatementSync::Run(const FunctionCallbackInfo<Value>& args) {
