@@ -1,5 +1,6 @@
 #include "node_sqlite.h"
 #include <path.h>
+#include <functional>
 #include "base_object-inl.h"
 #include "debug_utils-inl.h"
 #include "env-inl.h"
@@ -2343,6 +2344,27 @@ bool Statement::BindParams(const FunctionCallbackInfo<Value>& args) {
   return true;
 }
 
+int StatementRun(sqlite3_stmt* stmt) {
+  sqlite3_step(stmt);
+  return sqlite3_reset(stmt);
+}
+
+void Statement::Get(const FunctionCallbackInfo<Value>& args) {}
+
+void Statement::All(const FunctionCallbackInfo<Value>& args) {
+  Statement* stmt;
+  ASSIGN_OR_RETURN_UNWRAP(&stmt, args.This());
+  Environment* env = Environment::GetCurrent(args);
+  THROW_AND_RETURN_ON_BAD_STATE(
+      env, stmt->IsFinalized(), "statement has been finalized");
+  Isolate* isolate = env->isolate();
+  int r = sqlite3_reset(stmt->statement_);
+  CHECK_ERROR_OR_THROW(env->isolate(), stmt->db_.get(), r, SQLITE_OK, void());
+  if (!stmt->BindParams(args)) {
+    return;
+  }
+}
+
 void Statement::Run(const FunctionCallbackInfo<Value>& args) {
   Statement* stmt;
   ASSIGN_OR_RETURN_UNWRAP(&stmt, args.This());
@@ -2355,13 +2377,8 @@ void Statement::Run(const FunctionCallbackInfo<Value>& args) {
     return;
   }
 
-  auto task = [args, stmt, env]() -> int {
-    sqlite3_step(stmt->statement_);
-    return sqlite3_reset(stmt->statement_);
-  };
-
   if (!stmt->async_) {
-    int r = task();
+    int r = StatementRun(stmt->statement_);
     args.GetReturnValue().Set(Integer::New(env->isolate(), r));
     return;
   }
@@ -2413,7 +2430,7 @@ void Statement::Run(const FunctionCallbackInfo<Value>& args) {
 
   args.GetReturnValue().Set(resolver->GetPromise());
   // TODO(myself): todo: save work somewhere for cleaning it up
-  SQLiteAsyncWork *work = new SQLiteAsyncWork(env, stmt->db_.get(), resolver, task, after);
+  SQLiteAsyncWork *work = new SQLiteAsyncWork(env, stmt->db_.get(), resolver, std::bind(StatementRun, stmt->statement_), after);
   work->ScheduleWork();
 }
 
@@ -2659,6 +2676,8 @@ Local<FunctionTemplate> Statement::GetConstructorTemplate(Environment* env) {
     tmpl->SetClassName(FIXED_ONE_BYTE_STRING(isolate, "Statement"));
     tmpl->InstanceTemplate()->SetInternalFieldCount(
         Statement::kInternalFieldCount);
+    SetProtoMethod(isolate, tmpl, "all", Statement::All);
+    SetProtoMethod(isolate, tmpl, "get", Statement::Get);
     SetProtoMethod(isolate, tmpl, "run", Statement::Run);
     env->set_sqlite_statement_constructor_template(tmpl);
   }

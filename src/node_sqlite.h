@@ -129,6 +129,8 @@ class Statement : public BaseObject {
                                          BaseObjectPtr<DatabaseSync> db,
                                          sqlite3_stmt* stmt,
                                          bool async);
+  static void All(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void Get(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void Run(const v8::FunctionCallbackInfo<v8::Value>& args);
   bool BindValue(const v8::Local<v8::Value>& value, const int index);
   bool BindParams(const v8::FunctionCallbackInfo<v8::Value>& args);
