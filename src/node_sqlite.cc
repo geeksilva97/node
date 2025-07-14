@@ -425,15 +425,15 @@ class CustomAggregate {
   Global<Function> result_fn_;
 };
 
+template <typename T>
 class SQLiteAsyncWork : public ThreadPoolWork {
  public:
   explicit SQLiteAsyncWork(
       Environment* env,
       DatabaseSync* db,
       Local<Promise::Resolver> resolver,
-      std::function<int()> work,  // the work will always return a status code
-                                  // (that is the SQLite thing)
-      std::function<void(int, Local<Promise::Resolver>)> after)
+      std::function<T()> work,
+      std::function<void(T, Local<Promise::Resolver>)> after)
       : ThreadPoolWork(env, "node_sqlite_async"),
         env_(env),
         db_(db),
@@ -463,9 +463,9 @@ class SQLiteAsyncWork : public ThreadPoolWork {
   Environment* env_;
   DatabaseSync* db_;
   Global<Promise::Resolver> resolver_;
-  std::function<int()> work_ = nullptr;
-  std::function<void(int, Local<Promise::Resolver>)> after_ = nullptr;
-  int result_;
+  std::function<T()> work_ = nullptr;
+  std::function<void(T, Local<Promise::Resolver>)> after_ = nullptr;
+  T result_;
 };
 
 class BackupJob : public ThreadPoolWork {
@@ -2363,6 +2363,23 @@ void Statement::All(const FunctionCallbackInfo<Value>& args) {
   if (!stmt->BindParams(args)) {
     return;
   }
+
+  int num_cols = sqlite3_column_count(stmt->statement_);
+
+  if (stmt->return_arrays_) {
+  } else {
+  }
+
+  Local<Promise::Resolver> resolver;
+  if (!Promise::Resolver::New(env->context()).ToLocal(&resolver)) {
+    return;
+  }
+
+  args.GetReturnValue().Set(resolver->GetPromise());
+}
+
+void Statement::AddWork(ThreadPoolWork* sqlite_async_work) {
+  async_tasks_.insert(sqlite_async_work);
 }
 
 void Statement::Run(const FunctionCallbackInfo<Value>& args) {
@@ -2430,8 +2447,14 @@ void Statement::Run(const FunctionCallbackInfo<Value>& args) {
 
   args.GetReturnValue().Set(resolver->GetPromise());
   // TODO(myself): todo: save work somewhere for cleaning it up
-  SQLiteAsyncWork *work = new SQLiteAsyncWork(env, stmt->db_.get(), resolver, std::bind(StatementRun, stmt->statement_), after);
+  auto* work =
+      new SQLiteAsyncWork<int>(env,
+                               stmt->db_.get(),
+                               resolver,
+                               std::bind(StatementRun, stmt->statement_),
+                               after);
   work->ScheduleWork();
+  stmt->AddWork(work);
 }
 
 void StatementSync::Run(const FunctionCallbackInfo<Value>& args) {

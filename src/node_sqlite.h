@@ -6,6 +6,7 @@
 #include "base_object.h"
 #include "node_mem.h"
 #include "sqlite3.h"
+#include "threadpoolwork-inl.h"
 #include "util.h"
 
 #include <map>
@@ -50,6 +51,7 @@ class DatabaseOpenConfiguration {
 class StatementSync;
 class Statement;
 class BackupJob;
+template <typename T>
 class SQLiteAsyncWork;
 
 class DatabaseSync : public BaseObject {
@@ -135,6 +137,7 @@ class Statement : public BaseObject {
   bool BindValue(const v8::Local<v8::Value>& value, const int index);
   bool BindParams(const v8::FunctionCallbackInfo<v8::Value>& args);
   bool IsFinalized();
+  void AddWork(ThreadPoolWork* sqlite_async_work);
 
   SET_MEMORY_INFO_NAME(Statement)
   SET_SELF_SIZE(Statement)
@@ -147,7 +150,7 @@ class Statement : public BaseObject {
   bool use_big_ints_;
   bool allow_bare_named_params_;
   bool allow_unknown_named_params_;
-  std::set<SQLiteAsyncWork*> async_tasks_;
+  std::set<ThreadPoolWork*> async_tasks_;
   std::optional<std::map<std::string, std::string>> bare_named_params_;
 };
 
