@@ -51,8 +51,49 @@ class DatabaseOpenConfiguration {
 class StatementSync;
 class Statement;
 class BackupJob;
+class DatabaseSync;
 template <typename T>
 class SQLiteAsyncWork;
+
+class Database : public BaseObject {
+ private:
+  std::set<ThreadPoolWork*> async_tasks_;
+};
+
+class Statement : public BaseObject {
+ public:
+  Statement(Environment* env,
+            v8::Local<v8::Object> object,
+            BaseObjectPtr<DatabaseSync> db,
+            sqlite3_stmt* stmt,
+            bool async);
+  void MemoryInfo(MemoryTracker* tracker) const override;
+  static v8::Local<v8::FunctionTemplate> GetConstructorTemplate(
+      Environment* env);
+  static BaseObjectPtr<Statement> Create(Environment* env,
+                                         BaseObjectPtr<DatabaseSync> db,
+                                         sqlite3_stmt* stmt,
+                                         bool async);
+  static void All(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void Get(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void Run(const v8::FunctionCallbackInfo<v8::Value>& args);
+  bool BindValue(const v8::Local<v8::Value>& value, const int index);
+  bool BindParams(const v8::FunctionCallbackInfo<v8::Value>& args);
+  bool IsFinalized();
+
+  SET_MEMORY_INFO_NAME(Statement)
+  SET_SELF_SIZE(Statement)
+
+ private:
+  BaseObjectPtr<DatabaseSync> db_;
+  bool async_;
+  sqlite3_stmt* statement_ = nullptr;
+  bool return_arrays_ = false;
+  bool use_big_ints_;
+  bool allow_bare_named_params_;
+  bool allow_unknown_named_params_;
+  std::optional<std::map<std::string, std::string>> bare_named_params_;
+};
 
 class DatabaseSync : public BaseObject {
  public:
@@ -115,43 +156,6 @@ class DatabaseSync : public BaseObject {
   std::unordered_set<Statement*> async_statements_;
 
   friend class Session;
-};
-
-class Statement : public BaseObject {
- public:
-  Statement(Environment* env,
-            v8::Local<v8::Object> object,
-            BaseObjectPtr<DatabaseSync> db,
-            sqlite3_stmt* stmt,
-            bool async);
-  void MemoryInfo(MemoryTracker* tracker) const override;
-  static v8::Local<v8::FunctionTemplate> GetConstructorTemplate(
-      Environment* env);
-  static BaseObjectPtr<Statement> Create(Environment* env,
-                                         BaseObjectPtr<DatabaseSync> db,
-                                         sqlite3_stmt* stmt,
-                                         bool async);
-  static void All(const v8::FunctionCallbackInfo<v8::Value>& args);
-  static void Get(const v8::FunctionCallbackInfo<v8::Value>& args);
-  static void Run(const v8::FunctionCallbackInfo<v8::Value>& args);
-  bool BindValue(const v8::Local<v8::Value>& value, const int index);
-  bool BindParams(const v8::FunctionCallbackInfo<v8::Value>& args);
-  bool IsFinalized();
-  void AddWork(ThreadPoolWork* sqlite_async_work);
-
-  SET_MEMORY_INFO_NAME(Statement)
-  SET_SELF_SIZE(Statement)
-
- private:
-  BaseObjectPtr<DatabaseSync> db_;
-  bool async_;
-  sqlite3_stmt* statement_ = nullptr;
-  bool return_arrays_ = false;
-  bool use_big_ints_;
-  bool allow_bare_named_params_;
-  bool allow_unknown_named_params_;
-  std::set<ThreadPoolWork*> async_tasks_;
-  std::optional<std::map<std::string, std::string>> bare_named_params_;
 };
 
 class StatementSync : public BaseObject {

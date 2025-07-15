@@ -2349,6 +2349,10 @@ int StatementRun(sqlite3_stmt* stmt) {
   return sqlite3_reset(stmt);
 }
 
+using RowArray = std::vector<sqlite3_value*>;
+using RowObject = std::vector<std::pair<std::string, sqlite3_value*>>;
+using Row = std::variant<RowArray, RowObject>;
+
 void Statement::Get(const FunctionCallbackInfo<Value>& args) {}
 
 void Statement::All(const FunctionCallbackInfo<Value>& args) {
@@ -2364,22 +2368,65 @@ void Statement::All(const FunctionCallbackInfo<Value>& args) {
     return;
   }
 
-  int num_cols = sqlite3_column_count(stmt->statement_);
-
-  if (stmt->return_arrays_) {
-  } else {
-  }
-
   Local<Promise::Resolver> resolver;
   if (!Promise::Resolver::New(env->context()).ToLocal(&resolver)) {
     return;
   }
 
-  args.GetReturnValue().Set(resolver->GetPromise());
-}
+  auto task = [stmt]() -> std::vector<Row> {
+    int num_cols = sqlite3_column_count(stmt->statement_);
+    int r = 0;
+    std::vector<Row> rows;
+    if (stmt->return_arrays_) {
+      while ((r = sqlite3_step(stmt->statement_)) == SQLITE_ROW) {
+        std::vector<sqlite3_value*> array_values;
+        for (int i = 0; i < num_cols; ++i) {
+          sqlite3_value* val =
+              sqlite3_value_dup(sqlite3_column_value(stmt->statement_, i));
+          array_values.emplace_back(val);
+        }
+        rows.emplace_back(std::move(array_values));
+      }
+    } else {
+      while ((r = sqlite3_step(stmt->statement_)) == SQLITE_ROW) {
+        std::cout << "computing object" << std::endl;
+        RowObject object_values;
+        for (int i = 0; i < num_cols; ++i) {
+          const char* col_name = sqlite3_column_name(stmt->statement_, i);
+          sqlite3_value* val =
+              sqlite3_value_dup(sqlite3_column_value(stmt->statement_, i));
+          object_values.emplace_back(std::string(col_name), val);
+        }
+        rows.emplace_back(std::move(object_values));
+      }
+    }
 
-void Statement::AddWork(ThreadPoolWork* sqlite_async_work) {
-  async_tasks_.insert(sqlite_async_work);
+    return rows;
+  };
+
+  auto after = [env](std::vector<Row> rows, Local<Promise::Resolver> resolver) {
+    // TODO(geeksilva97): convert values to Local handles and put in the promise
+    for (auto& row : rows) {
+      if (std::holds_alternative<RowArray>(row)) {
+        auto& array = std::get<RowArray>(row);
+        for (sqlite3_value* val : array) {
+          // use val
+        }
+      } else {
+        auto& object = std::get<RowObject>(row);
+        for (auto& [key, val] : object) {
+          std::cout << key << std::endl;
+        }
+      }
+    }
+
+    resolver->Resolve(env->context(), Array::New(env->isolate(), 0));
+  };
+
+  auto* work = new SQLiteAsyncWork<std::vector<Row>>(
+      env, stmt->db_.get(), resolver, task, after);
+  work->ScheduleWork();
+  args.GetReturnValue().Set(resolver->GetPromise());
 }
 
 void Statement::Run(const FunctionCallbackInfo<Value>& args) {
@@ -2454,7 +2501,6 @@ void Statement::Run(const FunctionCallbackInfo<Value>& args) {
                                std::bind(StatementRun, stmt->statement_),
                                after);
   work->ScheduleWork();
-  stmt->AddWork(work);
 }
 
 void StatementSync::Run(const FunctionCallbackInfo<Value>& args) {

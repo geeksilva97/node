@@ -16,16 +16,18 @@ function nextDb() {
 const db = new DatabaseSync(':memory:');
 db.exec(`CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT);`);
 
-db.prepare('INSERT INTO test (name) VALUES (?);').run('Sync stuff');
+const syncStmt = db.prepare('INSERT INTO test (name) VALUES (?);');
+syncStmt.run('Sync stuff');
 // below an example to test failure: constraint violation
 // const p = db.prepare(`INSERT INTO test (id, name) VALUES (1, ?);`, true).run('Async stuff');
 const p = db.prepare(`INSERT INTO test (name) VALUES (?);`, true).run('Async stuff');
 
 p.then((result) => {
   console.log(result)
-  console.log(
-    db.prepare('SELECT * FROM test;').all()
-  )
+  const asyncStmt = db.prepare('SELECT * FROM test;', true)
+  asyncStmt.all().then((rows) => {
+    console.log(rows)
+  });
 }).catch((err) => {
   console.error('Error running statement:', err);
 });
