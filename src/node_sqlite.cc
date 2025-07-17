@@ -2079,6 +2079,8 @@ void StatementSync::All(const FunctionCallbackInfo<Value>& args) {
   args.GetReturnValue().Set(Array::New(isolate, rows.data(), rows.size()));
 }
 
+void Statement::Iterate(const FunctionCallbackInfo<Value>& args) {}
+
 void StatementSync::Iterate(const FunctionCallbackInfo<Value>& args) {
   StatementSync* stmt;
   ASSIGN_OR_RETURN_UNWRAP(&stmt, args.This());
@@ -2118,6 +2120,39 @@ void StatementSync::Iterate(const FunctionCallbackInfo<Value>& args) {
   }
 
   args.GetReturnValue().Set(iter->object());
+}
+
+void Statement::Get(const FunctionCallbackInfo<Value>& args) {
+  StatementSync* stmt;
+  ASSIGN_OR_RETURN_UNWRAP(&stmt, args.This());
+  Environment* env = Environment::GetCurrent(args);
+  THROW_AND_RETURN_ON_BAD_STATE(
+      env, stmt->IsFinalized(), "statement has been finalized");
+  Isolate* isolate = env->isolate();
+  int r = sqlite3_reset(stmt->statement_);
+  CHECK_ERROR_OR_THROW(isolate, stmt->db_.get(), r, SQLITE_OK, void());
+
+  if (!stmt->BindParams(args)) {
+    return;
+  }
+
+  Local<Promise::Resolver> resolver;
+  if (!Promise::Resolver::New(env->context()).ToLocal(&resolver)) {
+    return;
+  }
+
+  auto task = [stmt]() -> int {
+
+  };
+
+  auto after = [env, isolate, stmt](int result, Local<Promise::Resolver> resolver) {
+
+  };
+
+  auto* work = new SQLiteAsyncWork<std::vector<Row>>(
+      env, stmt->db_.get(), resolver, task, after);
+  work->ScheduleWork();
+  args.GetReturnValue().Set(resolver->GetPromise());
 }
 
 void StatementSync::Get(const FunctionCallbackInfo<Value>& args) {
@@ -2352,8 +2387,6 @@ int StatementRun(sqlite3_stmt* stmt) {
 using RowArray = std::vector<sqlite3_value*>;
 using RowObject = std::vector<std::pair<std::string, sqlite3_value*>>;
 using Row = std::variant<RowArray, RowObject>;
-
-void Statement::Get(const FunctionCallbackInfo<Value>& args) {}
 
 void Statement::All(const FunctionCallbackInfo<Value>& args) {
   Statement* stmt;
