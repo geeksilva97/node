@@ -25,9 +25,11 @@ const p = db.prepare(`INSERT INTO test (name) VALUES (?);`, true).run('Async stu
 p.then((result) => {
   console.log(result)
   const asyncStmt = db.prepare('SELECT * FROM test;', true)
+  // asyncStmt.setReturnArrays(true);
   asyncStmt.all().then((rows) => {
     console.log(rows)
   });
+
 }).catch((err) => {
   console.error('Error running statement:', err);
 });

@@ -2411,10 +2411,28 @@ void Statement::All(const FunctionCallbackInfo<Value>& args) {
     for (auto& row : rows) {
       std::cout << "Row " << i++ << std::endl;
       if (std::holds_alternative<RowArray>(row)) {
-        // auto& array = std::get<RowArray>(row);
-        // for (sqlite3_value* val : array) {
-        //   // use val
-        // }
+        auto& arr = std::get<RowArray>(row);
+        int num_cols = arr.size();
+        LocalVector<Value> array_values(isolate);
+        array_values.reserve(num_cols);
+        for (sqlite3_value* sqlite_val : arr) {
+          MaybeLocal<Value> js_val;
+          SQLITE_VALUE_TO_JS(value, isolate, stmt->use_big_ints_, js_val, sqlite_val);
+          if (js_val.IsEmpty()) {
+            return;
+          }
+
+          Local<Value> v8Value;
+          if (!js_val.ToLocal(&v8Value)) {
+            return;
+          }
+
+          array_values.emplace_back(v8Value);
+        }
+
+        Local<Array> row_array =
+            Array::New(isolate, array_values.data(), array_values.size());
+        js_rows.emplace_back(row_array);
       } else {
         auto& object = std::get<RowObject>(row);
         int num_cols = object.size();
@@ -2732,6 +2750,22 @@ void StatementSync::SetReadBigInts(const FunctionCallbackInfo<Value>& args) {
   stmt->use_big_ints_ = args[0]->IsTrue();
 }
 
+void Statement::SetReturnArrays(const FunctionCallbackInfo<Value>& args) {
+  Statement* stmt;
+  ASSIGN_OR_RETURN_UNWRAP(&stmt, args.This());
+  Environment* env = Environment::GetCurrent(args);
+  THROW_AND_RETURN_ON_BAD_STATE(
+      env, stmt->IsFinalized(), "statement has been finalized");
+
+  if (!args[0]->IsBoolean()) {
+    THROW_ERR_INVALID_ARG_TYPE(
+        env->isolate(), "The \"returnArrays\" argument must be a boolean.");
+    return;
+  }
+
+  stmt->return_arrays_ = args[0]->IsTrue();
+}
+
 void StatementSync::SetReturnArrays(const FunctionCallbackInfo<Value>& args) {
   StatementSync* stmt;
   ASSIGN_OR_RETURN_UNWRAP(&stmt, args.This());
@@ -2780,6 +2814,8 @@ Local<FunctionTemplate> Statement::GetConstructorTemplate(Environment* env) {
     SetProtoMethod(isolate, tmpl, "all", Statement::All);
     SetProtoMethod(isolate, tmpl, "get", Statement::Get);
     SetProtoMethod(isolate, tmpl, "run", Statement::Run);
+    SetProtoMethod(
+        isolate, tmpl, "setReturnArrays", Statement::SetReturnArrays);
     env->set_sqlite_statement_constructor_template(tmpl);
   }
   return tmpl;
