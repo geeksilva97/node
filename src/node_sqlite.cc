@@ -1028,6 +1028,7 @@ void DatabaseSync::New(const FunctionCallbackInfo<Value>& args) {
     }
   }
 
+  open_config.set_async(false);
   new DatabaseSync(
       env, args.This(), std::move(open_config), open, allow_load_extension);
 }
@@ -2722,43 +2723,43 @@ static void Initialize(Local<Object> target,
                        void* priv) {
   Environment* env = Environment::GetCurrent(context);
   Isolate* isolate = env->isolate();
-  Local<FunctionTemplate> db_tmpl =
+  Local<FunctionTemplate> db_sync_tmpl =
       NewFunctionTemplate(isolate, DatabaseSync::New);
-  db_tmpl->InstanceTemplate()->SetInternalFieldCount(
+  db_sync_tmpl->InstanceTemplate()->SetInternalFieldCount(
       DatabaseSync::kInternalFieldCount);
   Local<Object> constants = Object::New(isolate);
 
   DefineConstants(constants);
 
-  SetProtoMethod(isolate, db_tmpl, "open", DatabaseSync::Open);
-  SetProtoMethod(isolate, db_tmpl, "close", DatabaseSync::Close);
-  SetProtoDispose(isolate, db_tmpl, DatabaseSync::Dispose);
-  SetProtoMethod(isolate, db_tmpl, "prepare", DatabaseSync::Prepare);
-  SetProtoMethod(isolate, db_tmpl, "exec", DatabaseSync::Exec);
-  SetProtoMethod(isolate, db_tmpl, "function", DatabaseSync::CustomFunction);
+  SetProtoMethod(isolate, db_sync_tmpl, "open", DatabaseSync::Open);
+  SetProtoMethod(isolate, db_sync_tmpl, "close", DatabaseSync::Close);
+  SetProtoDispose(isolate, db_sync_tmpl, DatabaseSync::Dispose);
+  SetProtoMethod(isolate, db_sync_tmpl, "prepare", DatabaseSync::Prepare);
+  SetProtoMethod(isolate, db_sync_tmpl, "exec", DatabaseSync::Exec);
+  SetProtoMethod(isolate, db_sync_tmpl, "function", DatabaseSync::CustomFunction);
   SetProtoMethodNoSideEffect(
-      isolate, db_tmpl, "location", DatabaseSync::Location);
+      isolate, db_sync_tmpl, "location", DatabaseSync::Location);
   SetProtoMethod(
-      isolate, db_tmpl, "aggregate", DatabaseSync::AggregateFunction);
+      isolate, db_sync_tmpl, "aggregate", DatabaseSync::AggregateFunction);
   SetProtoMethod(
-      isolate, db_tmpl, "createSession", DatabaseSync::CreateSession);
+      isolate, db_sync_tmpl, "createSession", DatabaseSync::CreateSession);
   SetProtoMethod(
-      isolate, db_tmpl, "applyChangeset", DatabaseSync::ApplyChangeset);
+      isolate, db_sync_tmpl, "applyChangeset", DatabaseSync::ApplyChangeset);
   SetProtoMethod(isolate,
-                 db_tmpl,
+                 db_sync_tmpl,
                  "enableLoadExtension",
                  DatabaseSync::EnableLoadExtension);
   SetProtoMethod(
-      isolate, db_tmpl, "loadExtension", DatabaseSync::LoadExtension);
+      isolate, db_sync_tmpl, "loadExtension", DatabaseSync::LoadExtension);
   SetSideEffectFreeGetter(isolate,
-                          db_tmpl,
+                          db_sync_tmpl,
                           FIXED_ONE_BYTE_STRING(isolate, "isOpen"),
                           DatabaseSync::IsOpenGetter);
   SetSideEffectFreeGetter(isolate,
-                          db_tmpl,
+                          db_sync_tmpl,
                           FIXED_ONE_BYTE_STRING(isolate, "isTransaction"),
                           DatabaseSync::IsTransactionGetter);
-  SetConstructorFunction(context, target, "DatabaseSync", db_tmpl);
+  SetConstructorFunction(context, target, "DatabaseSync", db_sync_tmpl);
   SetConstructorFunction(context,
                          target,
                          "StatementSync",

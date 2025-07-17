@@ -21,6 +21,10 @@ class DatabaseOpenConfiguration {
 
   inline const std::string& location() const { return location_; }
 
+  inline bool get_async() const { return async_; }
+
+  inline void set_async(bool flag) { async_ = flag; }
+
   inline bool get_read_only() const { return read_only_; }
 
   inline void set_read_only(bool flag) { read_only_ = flag; }
@@ -65,6 +69,7 @@ class DatabaseOpenConfiguration {
 
  private:
   std::string location_;
+  bool async_ = true;
   bool read_only_ = false;
   bool enable_foreign_keys_ = true;
   bool enable_dqs_ = false;
@@ -130,7 +135,7 @@ class DatabaseSync : public BaseObject {
   SET_MEMORY_INFO_NAME(DatabaseSync)
   SET_SELF_SIZE(DatabaseSync)
 
- private:
+ protected:
   bool Open();
   void DeleteSessions();
 
@@ -146,6 +151,10 @@ class DatabaseSync : public BaseObject {
   std::unordered_set<StatementSync*> statements_;
 
   friend class Session;
+};
+
+class Database : public DatabaseSync {
+
 };
 
 class StatementSync : public BaseObject {
