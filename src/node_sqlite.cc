@@ -2404,23 +2404,55 @@ void Statement::All(const FunctionCallbackInfo<Value>& args) {
     return rows;
   };
 
-  auto after = [env](std::vector<Row> rows, Local<Promise::Resolver> resolver) {
-    // TODO(geeksilva97): convert values to Local handles and put in the promise
+  auto after = [env, isolate, stmt](std::vector<Row> rows, Local<Promise::Resolver> resolver) {
+    LocalVector<Value> js_rows(isolate);
+    int i = 0;
+
     for (auto& row : rows) {
+      std::cout << "Row " << i++ << std::endl;
       if (std::holds_alternative<RowArray>(row)) {
-        auto& array = std::get<RowArray>(row);
-        for (sqlite3_value* val : array) {
-          // use val
-        }
+        // auto& array = std::get<RowArray>(row);
+        // for (sqlite3_value* val : array) {
+        //   // use val
+        // }
       } else {
         auto& object = std::get<RowObject>(row);
-        for (auto& [key, val] : object) {
-          std::cout << key << std::endl;
+        int num_cols = object.size();
+        LocalVector<Name> row_keys(isolate);
+        row_keys.reserve(num_cols);
+        LocalVector<Value> row_values(isolate);
+        row_values.reserve(num_cols);
+        for (auto& [key, sqlite_val] : object) {
+          Local<Name> key_name;
+          if (!String::NewFromUtf8(isolate, key.c_str())
+                   .ToLocal(&key_name)) {
+            return;
+          }
+
+          row_keys.emplace_back(key_name);
+
+          MaybeLocal<Value> js_val;
+          SQLITE_VALUE_TO_JS(value, isolate, stmt->use_big_ints_, js_val, sqlite_val);
+          if (js_val.IsEmpty()) {
+            return;
+          }
+
+          Local<Value> v8Value;
+          if (!js_val.ToLocal(&v8Value)) {
+            return;
+          }
+
+          row_values.emplace_back(v8Value);
         }
+
+        DCHECK_EQ(row_keys.size(), row_values.size());
+        Local<Object> row_obj = Object::New(
+            isolate, Null(isolate), row_keys.data(), row_values.data(), num_cols);
+        js_rows.emplace_back(row_obj);
       }
     }
 
-    resolver->Resolve(env->context(), Array::New(env->isolate(), 0));
+    resolver->Resolve(env->context(), Array::New(isolate, js_rows.data(), js_rows.size()));
   };
 
   auto* work = new SQLiteAsyncWork<std::vector<Row>>(
