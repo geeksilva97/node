@@ -215,6 +215,12 @@ class Database : public BaseObject {
   void SetIgnoreNextSQLiteError(bool ignore);
   bool ShouldIgnoreSQLiteError();
 
+  // Track registered user-defined functions to detect if async queries
+  // would invoke UDFs (which require V8 isolate context)
+  void AddRegisteredUDF(const std::string& name);
+  void AddRegisteredAggregateUDF(const std::string& name);
+  bool HasPotentialUDFUsage(const std::string& sql);
+
   SET_MEMORY_INFO_NAME(Database)
   SET_SELF_SIZE(Database)
 
@@ -233,6 +239,10 @@ class Database : public BaseObject {
   std::set<BackupJob*> backups_;
   std::set<sqlite3_session*> sessions_;
   std::unordered_set<Statement*> statements_;
+
+  // User-defined functions tracking
+  std::unordered_set<std::string> registered_udfs_;
+  std::unordered_set<std::string> registered_aggregate_udfs_;
 
   friend class Session;
   friend class SQLTagStore;

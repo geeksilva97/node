@@ -745,6 +745,49 @@ void Database::RemoveAsyncTask(ThreadPoolWork* async_task) {
   async_tasks_.erase(async_task);
 }
 
+void Database::AddRegisteredUDF(const std::string& name) {
+  registered_udfs_.insert(name);
+}
+
+void Database::AddRegisteredAggregateUDF(const std::string& name) {
+  registered_aggregate_udfs_.insert(name);
+}
+
+bool Database::HasPotentialUDFUsage(const std::string& sql) {
+  if (registered_udfs_.empty() && registered_aggregate_udfs_.empty()) {
+    return false;
+  }
+
+  // Create uppercase version of SQL for case-insensitive comparison
+  std::string sql_upper = sql;
+  std::transform(sql_upper.begin(), sql_upper.end(),
+                 sql_upper.begin(), ::toupper);
+
+  // Check scalar functions
+  for (const auto& udf : registered_udfs_) {
+    std::string udf_upper = udf;
+    std::transform(udf_upper.begin(), udf_upper.end(),
+                   udf_upper.begin(), ::toupper);
+
+    if (sql_upper.find(udf_upper) != std::string::npos) {
+      return true;
+    }
+  }
+
+  // Check aggregate functions
+  for (const auto& agg : registered_aggregate_udfs_) {
+    std::string agg_upper = agg;
+    std::transform(agg_upper.begin(), agg_upper.end(),
+                   agg_upper.begin(), ::toupper);
+
+    if (sql_upper.find(agg_upper) != std::string::npos) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void Database::DeleteSessions() {
   // all attached sessions need to be deleted before the database is closed
   // https://www.sqlite.org/session/sqlite3session_create.html
@@ -1399,6 +1442,11 @@ void Database::CustomFunction(const FunctionCallbackInfo<Value>& args) {
   }
 
   Utf8Value name(env->isolate(), args[0].As<String>());
+  std::string func_name(*name, name.length());
+
+  // Track this UDF for async query detection
+  db->AddRegisteredUDF(func_name);
+
   Local<Function> fn = args[fn_index].As<Function>();
 
   int argc = 0;
@@ -1472,6 +1520,11 @@ void Database::AggregateFunction(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
   Utf8Value name(env->isolate(), args[0].As<String>());
+  std::string agg_name(*name, name.length());
+
+  // Track this aggregate UDF for async query detection
+  db->AddRegisteredAggregateUDF(agg_name);
+
   Local<Object> options = args[1].As<Object>();
   Local<Value> start_v;
   if (!options->Get(env->context(), env->start_string()).ToLocal(&start_v)) {
@@ -2485,8 +2538,121 @@ MaybeLocal<Object> StatementSQLiteToJSConverter::ConvertStatementRun(
 
 MaybeLocal<Promise::Resolver> StatementAsyncExecutionHelper::All(
     Environment* env, Statement* stmt) {
-  Isolate* isolate = env->isolate();
   Database* db = stmt->db_.get();
+  const char* sql_text = sqlite3_sql(stmt->statement_);
+
+  // Check if this query uses any registered user-defined functions
+  // If so, we must run it synchronously on the main thread (not in thread pool)
+  if (sql_text != nullptr) {
+    if (db->HasPotentialUDFUsage(sql_text)) {
+      // UDF detected - run synchronously on main thread
+      Isolate* isolate = env->isolate();
+      Local<Promise::Resolver> resolver;
+      if (!Promise::Resolver::New(env->context()).ToLocal(&resolver)) {
+        return MaybeLocal<Promise::Resolver>();
+      }
+
+      int num_cols = sqlite3_column_count(stmt->statement_);
+      LocalVector<Value> js_rows(isolate);
+      TryCatch try_catch(isolate);
+
+      int r = 0;
+      while ((r = sqlite3_step(stmt->statement_)) == SQLITE_ROW) {
+        if (stmt->return_arrays_) {
+          LocalVector<Value> array_values(isolate);
+          array_values.reserve(num_cols);
+          for (int i = 0; i < num_cols; ++i) {
+            MaybeLocal<Value> js_val;
+            SQLITE_VALUE_TO_JS(
+                value, isolate, stmt->use_big_ints_,
+                js_val, sqlite3_column_value(stmt->statement_, i));
+            if (js_val.IsEmpty()) {
+              if (try_catch.HasCaught()) {
+                resolver->Reject(env->context(), try_catch.Exception()).FromJust();
+              }
+              return resolver;
+            }
+
+            Local<Value> v8Value;
+            if (!js_val.ToLocal(&v8Value)) {
+              if (try_catch.HasCaught()) {
+                resolver->Reject(env->context(), try_catch.Exception()).FromJust();
+              }
+              return resolver;
+            }
+
+            array_values.emplace_back(v8Value);
+          }
+
+          Local<Array> row_array =
+              Array::New(isolate, array_values.data(), array_values.size());
+          js_rows.emplace_back(row_array);
+        } else {
+          LocalVector<Name> row_keys(isolate);
+          row_keys.reserve(num_cols);
+          LocalVector<Value> row_values(isolate);
+          row_values.reserve(num_cols);
+          for (int i = 0; i < num_cols; ++i) {
+            const char* col_name = sqlite3_column_name(stmt->statement_, i);
+            Local<Name> key_name;
+            if (!String::NewFromUtf8(isolate, col_name).ToLocal(&key_name)) {
+              if (try_catch.HasCaught()) {
+                resolver->Reject(env->context(), try_catch.Exception()).FromJust();
+              }
+              return resolver;
+            }
+
+            row_keys.emplace_back(key_name);
+
+            MaybeLocal<Value> js_val;
+            SQLITE_VALUE_TO_JS(
+                value, isolate, stmt->use_big_ints_,
+                js_val, sqlite3_column_value(stmt->statement_, i));
+            if (js_val.IsEmpty()) {
+              if (try_catch.HasCaught()) {
+                resolver->Reject(env->context(), try_catch.Exception()).FromJust();
+              }
+              return resolver;
+            }
+
+            Local<Value> v8Value;
+            if (!js_val.ToLocal(&v8Value)) {
+              if (try_catch.HasCaught()) {
+                resolver->Reject(env->context(), try_catch.Exception()).FromJust();
+              }
+              return resolver;
+            }
+
+            row_values.emplace_back(v8Value);
+          }
+
+          DCHECK_EQ(row_keys.size(), row_values.size());
+          Local<Object> row_obj = Object::New(isolate,
+                                              Null(isolate),
+                                              row_keys.data(),
+                                              row_values.data(),
+                                              num_cols);
+          js_rows.emplace_back(row_obj);
+        }
+      }
+
+      if (r != SQLITE_DONE) {
+        Local<Object> e;
+        if (!CreateSQLiteError(isolate, db->Connection()).ToLocal(&e)) {
+          return resolver;
+        }
+        resolver->Reject(env->context(), e).FromJust();
+        return resolver;
+      }
+
+      resolver->Resolve(env->context(),
+                        Array::New(isolate, js_rows.data(), js_rows.size()))
+          .FromJust();
+      return resolver;
+    }
+  }
+
+  Isolate* isolate = env->isolate();
   auto task = [stmt]() -> std::vector<Row> {
     int num_cols = sqlite3_column_count(stmt->statement_);
     std::vector<Row> rows;
@@ -2607,6 +2773,64 @@ MaybeLocal<Promise::Resolver> StatementAsyncExecutionHelper::All(
 MaybeLocal<Promise::Resolver> StatementAsyncExecutionHelper::Get(
     Environment* env, Statement* stmt) {
   Database* db = stmt->db_.get();
+  const char* sql_text = sqlite3_sql(stmt->statement_);
+
+  // Check if this query uses any registered user-defined functions
+  // If so, we must run it synchronously on the main thread (not in thread pool)
+  // because UDFs need access to the V8 isolate which is only available on the main thread
+  if (sql_text != nullptr) {
+    if (db->HasPotentialUDFUsage(sql_text)) {
+      // UDF detected - run synchronously on main thread
+      Local<Promise::Resolver> resolver;
+      if (!Promise::Resolver::New(env->context()).ToLocal(&resolver)) {
+        return MaybeLocal<Promise::Resolver>();
+      }
+
+      Isolate* isolate = env->isolate();
+      int r = sqlite3_step(stmt->statement_);
+
+      if (r == SQLITE_DONE) {
+        resolver->Resolve(env->context(), Undefined(isolate)).FromJust();
+        return resolver;
+      }
+
+      if (r != SQLITE_ROW) {
+        Local<Object> e;
+        if (!CreateSQLiteError(isolate, db->Connection()).ToLocal(&e)) {
+          return MaybeLocal<Promise::Resolver>();
+        }
+        resolver->Reject(env->context(), e).FromJust();
+        return resolver;
+      }
+
+      int num_cols = sqlite3_column_count(stmt->statement_);
+
+      if (num_cols == 0) {
+        resolver->Resolve(env->context(), Undefined(isolate)).FromJust();
+        return resolver;
+      }
+
+      TryCatch try_catch(isolate);
+      Local<Value> result;
+      if (StatementSQLiteToJSConverter::ConvertStatementGet(env,
+                                                            stmt->statement_,
+                                                            num_cols,
+                                                            stmt->use_big_ints_,
+                                                            stmt->return_arrays_)
+              .ToLocal(&result)) {
+        resolver->Resolve(env->context(), result).FromJust();
+        return resolver;
+      }
+
+      if (try_catch.HasCaught()) {
+        resolver->Reject(env->context(), try_catch.Exception()).FromJust();
+      }
+
+      return resolver;
+    }
+  }
+
+  // No UDF detected - safe to run asynchronously on thread pool
   auto task = [stmt]() -> std::tuple<int, int> {
     int r = sqlite3_step(stmt->statement_);
     if (r != SQLITE_ROW && r != SQLITE_DONE) {
@@ -2667,7 +2891,47 @@ MaybeLocal<Promise::Resolver> StatementAsyncExecutionHelper::Get(
 MaybeLocal<Promise::Resolver> StatementAsyncExecutionHelper::Run(
     Environment* env, Statement* stmt) {
   Database* db = stmt->db_.get();
+  const char* sql_text = sqlite3_sql(stmt->statement_);
   sqlite3* conn = db->Connection();
+
+  // Check if this query uses any registered user-defined functions
+  // If so, we must run it synchronously on the main thread (not in thread pool)
+  if (sql_text != nullptr) {
+    if (db->HasPotentialUDFUsage(sql_text)) {
+      // UDF detected - run synchronously on main thread
+      Local<Promise::Resolver> resolver;
+      if (!Promise::Resolver::New(env->context()).ToLocal(&resolver)) {
+        return MaybeLocal<Promise::Resolver>();
+      }
+
+      Isolate* isolate = env->isolate();
+      sqlite3_step(stmt->statement_);
+      int r = sqlite3_reset(stmt->statement_);
+
+      if (r != SQLITE_OK) {
+        Local<Object> e;
+        if (!CreateSQLiteError(isolate, conn).ToLocal(&e)) {
+          return resolver;
+        }
+        resolver->Reject(env->context(), e).FromJust();
+        return resolver;
+      }
+
+      sqlite3_int64 last_insert_rowid = sqlite3_last_insert_rowid(conn);
+      sqlite3_int64 changes = sqlite3_changes64(conn);
+
+      Local<Object> promise_result;
+      if (!StatementSQLiteToJSConverter::ConvertStatementRun(
+               env, stmt->use_big_ints_, changes, last_insert_rowid)
+               .ToLocal(&promise_result)) {
+        return resolver;
+      }
+
+      resolver->Resolve(env->context(), promise_result).FromJust();
+      return resolver;
+    }
+  }
+
   auto task =
       [stmt,
        conn]() -> std::variant<int, std::tuple<sqlite3_int64, sqlite3_int64>> {
