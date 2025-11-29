@@ -1,0 +1,172 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                  UDF Detection Decision Flowchart                          ║
+║                    (For Async Statement Execution)                         ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+                                    START
+                                      │
+                                      ▼
+                    ┌─────────────────────────────┐
+                    │   User calls stmt.get()     │
+                    │      (with await)           │
+                    └──────────────┬──────────────┘
+                                   │
+                                   ▼
+                    ┌──────────────────────────────────┐
+                    │ Get SQL text via sqlite3_sql()   │
+                    │ Example: "SELECT sleep(200)"     │
+                    └──────────────┬───────────────────┘
+                                   │
+                                   ▼
+                    ┌──────────────────────────────────┐
+                    │ Extract UDF names from query     │
+                    │ (Look for: "sleep" in SQL)       │
+                    └──────────────┬───────────────────┘
+                                   │
+                                   ▼
+                    ┌──────────────────────────────────┐
+            ┌──────►│ Check registered UDF names       │◄──────────┐
+            │       │ (Stored in Database class)      │           │
+            │       │ - registered_udfs_              │           │
+            │       │ - registered_aggregate_udfs_    │           │
+            │       └──────────────┬───────────────────┘           │
+            │                      │                               │
+            │                      ▼                               │
+            │       ┌──────────────────────────────────┐           │
+            │       │   Does SQL contain any of       │           │
+            │       │   the registered UDF names?     │           │
+            │       │   (Case-insensitive match)      │           │
+            │       └──────────┬───────────┬──────────┘           │
+            │                  │           │                      │
+        ┌───┴──────────┐  ┌────┘           └────┐  ┌──────────────┘
+        │              │  │                     │  │
+        NO             │  │ YES                 │  │ Error/Exception
+        │              │  │                     │  │
+        ▼              │  ▼                     ▼  ▼
+   ╔═════════════╗    │  ╔═════════════════════════╗
+   ║  Run Async  ║    │  ║  Run Synchronously      ║
+   ║ on Thread   ║    │  ║   on Main Thread        ║
+   ║   Pool      ║    │  ║                         ║
+   ║             ║    │  ║  Reasons:               ║
+   ║ Benefits:   ║    │  ║  • UDFs need V8 isolate║
+   ║ • Parallel  ║    │  ║  • Main thread only     ║
+   ║ • Concurrent║    │  ║  • Avoids crash        ║
+   ║ • Non-block ║    │  ║  • Safe execution      ║
+   ║             ║    │  ║                         ║
+   ║ No crash!   ║    │  ║  Example SQL:           ║
+   ║ ✅ SAFE     ║    │  ║  SELECT sleep(200)      ║
+   ╚──────┬──────╝    │  ╚──────────┬──────────────╝
+          │           │             │
+          │    ┌──────┘             │
+          │    │                    │
+          ▼    ▼                    ▼
+        ┌────────────────────────────────┐
+        │   sqlite3_step() executes      │
+        │                                │
+        │  Query without UDF:            │
+        │  └─> No V8 calls needed        │
+        │  └─> Can run on any thread ✅  │
+        │                                │
+        │  Query with UDF:               │
+        │  └─> V8 calls needed           │
+        │  └─> Must run on main thread   │
+        │  └─> Still safe ✅             │
+        └────────────┬───────────────────┘
+                     │
+                     ▼
+        ┌────────────────────────────────┐
+        │   Return Promise with result   │
+        │                                │
+        │  Both paths return correct     │
+        │  results, but:                 │
+        │  • UDF path: Synchronous       │
+        │  • No-UDF path: Asynchronous   │
+        │                                │
+        │  Both paths are SAFE ✅        │
+        └────────────┬───────────────────┘
+                     │
+                     ▼
+                    END
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+Decision Table:
+
+┌─────────────┬──────────────────┬────────────┬──────────────────────────────┐
+│   SQL       │   Has Registered │ Execution  │ Why                          │
+│   Example   │   UDF?           │ Type       │                              │
+├─────────────┼──────────────────┼────────────┼──────────────────────────────┤
+│ SELECT 1    │       NO         │ ASYNC      │ No V8 calls needed           │
+│ SELECT      │       YES        │ SYNC       │ UDF needs V8 isolate         │
+│  sleep(100) │                  │            │ (from main thread)           │
+│             │                  │            │                              │
+│ SELECT      │       NO         │ ASYNC      │ MAX() is built-in, not UDF   │
+│  MAX(col)   │                  │            │                              │
+│             │                  │            │                              │
+│ SELECT      │       YES        │ SYNC       │ UPPER() is built-in BUT      │
+│ UPPER(col)  │                  │            │ matches false-positive on    │
+│ FROM        │                  │            │ registered UDF name "upper"  │
+│ upper_table │                  │            │ (Safe: just runs sync)       │
+│             │                  │            │                              │
+│ SELECT      │       YES        │ SYNC       │ Both func1 and func2 are UDFs│
+│ func1(a),   │                  │            │                              │
+│ func2(b)    │                  │            │                              │
+│             │                  │            │                              │
+│ SELECT      │       NO         │ ASYNC      │ Neither COUNT nor MAX are    │
+│ COUNT(*),   │                  │            │ registered UDFs              │
+│ MAX(col)    │                  │            │                              │
+└─────────────┴──────────────────┴────────────┴──────────────────────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+Implementation Overview:
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         Database Class (node_sqlite.h)                       │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  std::unordered_set<std::string> registered_udfs_;                          │
+│  std::unordered_set<std::string> registered_aggregate_udfs_;                │
+│                                                                              │
+│  void AddRegisteredUDF(const std::string& name);                            │
+│  void AddRegisteredAggregateUDF(const std::string& name);                   │
+│  bool HasPotentialUDFUsage(const std::string& sql);                         │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                        ▲
+                                        │ Used by
+                                        │
+┌──────────────────────────────────────────────────────────────────────────────┐
+│              StatementAsyncExecutionHelper::Get() (node_sqlite.cc)           │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  MaybeLocal<Promise::Resolver> Get(Environment* env, Statement* stmt) {    │
+│    const char* sql = sqlite3_sql(stmt->statement_);                        │
+│                                                                              │
+│    if (sql && db->HasPotentialUDFUsage(sql)) {                             │
+│      // UDF detected: run synchronously                                    │
+│      return GetSync(env, stmt);  // NEW METHOD                            │
+│    }                                                                         │
+│                                                                              │
+│    // No UDF: run asynchronously (original code)                           │
+│    auto task = [stmt]() { return sqlite3_step(...); };                    │
+│    // ... schedule on thread pool ...                                      │
+│  }                                                                           │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                        ▲
+                                        │ Calls
+                                        │
+                    ┌───────────────────┴────────────────┐
+                    │                                    │
+        ┌───────────▼──────────┐          ┌──────────────▼──────────┐
+        │   GetSync()          │          │   Original Async Code  │
+        │   (NEW)              │          │   (UNCHANGED)          │
+        │                      │          │                        │
+        │ Main Thread          │          │ Thread Pool            │
+        │ Synchronous          │          │ Asynchronous           │
+        │ Safe with UDFs ✅   │          │ Safe without UDFs ✅   │
+        └──────────────────────┘          └────────────────────────┘
+
