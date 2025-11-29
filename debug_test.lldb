@@ -1,0 +1,10 @@
+#!/usr/bin/env lldb
+
+# Create target
+target create ./out/Release/node
+
+# Set breakpoints
+breakpoint set --file node_sqlite.cc --line 2611
+
+# Run the test
+process launch -- test/parallel/test-sqlite-multithreading.js

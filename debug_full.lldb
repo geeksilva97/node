@@ -1,0 +1,7 @@
+#!/usr/bin/env lldb
+
+# Create target
+target create ./out/Release/node
+
+# Run the test - let it crash and capture
+process launch -- test/parallel/test-sqlite-multithreading.js

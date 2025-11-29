@@ -1,0 +1,26 @@
+(lldb) command source -s 0 'debug_test.lldb'
+Executing commands in '/Users/edy/projects/contributions/node/debug_test.lldb'.
+(lldb) #!/usr/bin/env lldb
+(lldb) # Create target
+(lldb) target create ./out/Release/node
+Current executable set to '/Users/edy/projects/contributions/node/out/Release/node' (arm64).
+(lldb) # Set breakpoints
+(lldb) breakpoint set --file node_sqlite.cc --line 2611
+Breakpoint 1: where = node`node::sqlite::StatementAsyncExecutionHelper::Get(node::Environment*, node::sqlite::Statement*) + 40 at node_sqlite.cc:2612:18, address = 0x000000010057b2bc
+(lldb) # Run the test
+(lldb) process launch -- test/parallel/test-sqlite-multithreading.js
+(node:3545) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Process 3545 launched: '/Users/edy/projects/contributions/node/out/Release/node' (arm64)
+Process 3545 stopped
+* thread #1, name = 'MainThread', queue = 'com.apple.main-thread', stop reason = breakpoint 1.1
+    frame #0: 0x000000010057b2bc node`node::sqlite::StatementAsyncExecutionHelper::Get(env=0x0000000140817a00, stmt=0x00006000000c0620) at node_sqlite.cc:2612:18
+   2609	  Database* db = stmt->db_.get();
+   2610	  auto task = [stmt]() -> std::tuple<int, int> {
+   2611	    int r = sqlite3_step(stmt->statement_);
+-> 2612	    if (r != SQLITE_ROW && r != SQLITE_DONE) {
+    	                 ^
+   2613	      return std::make_tuple(r, 0);
+   2614	    }
+   2615	    return std::make_tuple(r, sqlite3_column_count(stmt->statement_));
+Target 0: (node) stopped.
