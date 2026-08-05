@@ -10,8 +10,10 @@
 #include "util.h"
 
 #include <array>
+#include <atomic>
 #include <list>
 #include <map>
+#include <mutex>  // NOLINT(build/c++11)
 #include <optional>
 #include <string_view>
 #include <unordered_set>
@@ -267,6 +269,27 @@ class DatabaseSync : public BaseObject {
   void DecrementCallbackDepth() { --callback_depth_; }
   bool IsInCallback() const { return callback_depth_ > 0; }
 
+  // Connections are opened with SQLITE_OPEN_NOMUTEX, so SQLite performs no
+  // per-connection locking of its own. That is safe because a connection is
+  // only ever used from the thread that owns it - with one exception:
+  // BackupJob::DoThreadPoolWork() calls sqlite3_backup_step() on a threadpool
+  // thread while JavaScript may keep using the same connection. These members
+  // serialize that one case.
+  //
+  // active_backups_ is only ever incremented and decremented on the main
+  // thread, so when it reads zero there (the overwhelmingly common case) no
+  // backup can begin concurrently and the lock is skipped entirely.
+  void IncrementActiveBackups() {
+    active_backups_.fetch_add(1, std::memory_order_release);
+  }
+  void DecrementActiveBackups() {
+    active_backups_.fetch_sub(1, std::memory_order_release);
+  }
+  bool HasActiveBackups() const {
+    return active_backups_.load(std::memory_order_acquire) > 0;
+  }
+  std::recursive_mutex& connection_mutex() { return connection_mutex_; }
+
   SET_MEMORY_INFO_NAME(DatabaseSync)
   SET_SELF_SIZE(DatabaseSync)
 
@@ -285,6 +308,11 @@ class DatabaseSync : public BaseObject {
   std::set<BackupJob*> backups_;
   std::unordered_set<Session*> sessions_;
   std::unordered_set<StatementSync*> statements_;
+
+  std::atomic<uint32_t> active_backups_{0};
+  // Recursive because a user-defined function runs inside sqlite3_step() and
+  // may call back into the same database, re-entering a guarded scope.
+  std::recursive_mutex connection_mutex_;
 
   friend class DatabaseSyncLimits;
   friend class Session;
@@ -447,6 +475,24 @@ class SQLTagStore : public BaseObject {
   BaseObjectWeakPtr<DatabaseSync> database_;
   LRUCache<std::string, BaseObjectPtr<StatementSync>> sql_tags_;
   friend class StatementExecutionHelper;
+};
+
+// Serializes main-thread access to a connection against an in-flight backup
+// running on the threadpool. Takes no lock at all unless a backup is active,
+// so the common path costs a single atomic load.
+class ConnectionAccessGuard {
+ public:
+  explicit ConnectionAccessGuard(DatabaseSync* db) {
+    if (db != nullptr && db->HasActiveBackups()) {
+      lock_ = std::unique_lock<std::recursive_mutex>(db->connection_mutex());
+    }
+  }
+
+  ConnectionAccessGuard(const ConnectionAccessGuard&) = delete;
+  ConnectionAccessGuard& operator=(const ConnectionAccessGuard&) = delete;
+
+ private:
+  std::unique_lock<std::recursive_mutex> lock_;
 };
 
 class CallbackDepthGuard {

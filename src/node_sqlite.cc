@@ -547,10 +547,17 @@ class BackupJob : public ThreadPoolWork {
       return;
     }
 
+    source_->IncrementActiveBackups();
+    backup_counted_ = true;
+
     this->ScheduleWork();
   }
 
   void DoThreadPoolWork() override {
+    // Runs on a threadpool thread. The source connection was opened with
+    // SQLITE_OPEN_NOMUTEX, so JavaScript touching the same connection on the
+    // main thread must be excluded here rather than by SQLite.
+    std::lock_guard<std::recursive_mutex> lock(source_->connection_mutex());
     backup_status_ = sqlite3_backup_step(backup_, pages_);
   }
 
@@ -617,6 +624,10 @@ class BackupJob : public ThreadPoolWork {
   void Finalize() {
     Cleanup();
     if (source_) {
+      if (backup_counted_) {
+        source_->DecrementActiveBackups();
+        backup_counted_ = false;
+      }
       source_->RemoveBackup(this);
       source_.reset();
     }
@@ -666,6 +677,7 @@ class BackupJob : public ThreadPoolWork {
 
   Environment* env_;
   BaseObjectPtr<DatabaseSync> source_;
+  bool backup_counted_ = false;
   Global<Promise::Resolver> resolver_;
   Global<Function> progressFunc_;
   sqlite3* dest_ = nullptr;
@@ -807,6 +819,7 @@ Intercepted DatabaseSyncLimits::LimitsGetter(
     return Intercepted::kYes;
   }
 
+  ConnectionAccessGuard conn_guard(limits->database_.get());
   int current_value = sqlite3_limit(
       limits->database_->Connection(), limit_info->sqlite_limit_id, -1);
   info.GetReturnValue().Set(Integer::New(isolate, current_value));
@@ -864,6 +877,7 @@ Intercepted DatabaseSyncLimits::LimitsSetter(
     }
   }
 
+  ConnectionAccessGuard conn_guard(limits->database_.get());
   sqlite3_limit(
       limits->database_->Connection(), limit_info->sqlite_limit_id, new_value);
   return Intercepted::kYes;
@@ -988,7 +1002,12 @@ bool DatabaseSync::Open() {
   });
 
   // TODO(cjihrig): Support additional flags.
-  int default_flags = SQLITE_OPEN_URI;
+  // SQLITE_OPEN_NOMUTEX puts the connection in multi-thread mode: SQLite skips
+  // its per-connection mutex, which it would otherwise take on every API call
+  // (sqlite3_step() and each sqlite3_column_*()). A connection is only used
+  // from its owning thread, except for sqlite3_backup_step(), which
+  // ConnectionAccessGuard serializes.
+  int default_flags = SQLITE_OPEN_URI | SQLITE_OPEN_NOMUTEX;
   int flags = open_config_.get_read_only()
                   ? SQLITE_OPEN_READONLY
                   : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
@@ -1449,6 +1468,7 @@ void DatabaseSync::IsTransactionGetter(
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(db);
   args.GetReturnValue().Set(sqlite3_get_autocommit(db->connection_) == 0);
 }
 
@@ -1477,6 +1497,7 @@ void DatabaseSync::Close(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(db);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, db->IsInCallback(), "database cannot be closed while in a callback");
   db->FinalizeStatements();
@@ -1499,6 +1520,7 @@ void DatabaseSync::Prepare(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(db);
 
   if (!args[0]->IsString()) {
     THROW_ERR_INVALID_ARG_TYPE(env->isolate(),
@@ -1636,6 +1658,7 @@ void DatabaseSync::Exec(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(db);
 
   if (!args[0]->IsString()) {
     THROW_ERR_INVALID_ARG_TYPE(env->isolate(),
@@ -1660,6 +1683,7 @@ void DatabaseSync::CustomFunction(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(db);
 
   if (!args[0]->IsString()) {
     THROW_ERR_INVALID_ARG_TYPE(env->isolate(),
@@ -1803,6 +1827,7 @@ void DatabaseSync::Location(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(db);
 
   std::string db_name = "main";
   if (!args[0]->IsUndefined()) {
@@ -1833,6 +1858,7 @@ void DatabaseSync::Serialize(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(db);
 
   std::string db_name = "main";
   if (!args[0]->IsUndefined()) {
@@ -1892,6 +1918,7 @@ void DatabaseSync::Deserialize(const FunctionCallbackInfo<Value>& args) {
       env,
       db->IsInCallback(),
       "database cannot be deserialized while in a callback");
+  ConnectionAccessGuard conn_guard(db);
 
   if (!args[0]->IsUint8Array()) {
     THROW_ERR_INVALID_ARG_TYPE(env->isolate(),
@@ -1967,6 +1994,7 @@ void DatabaseSync::AggregateFunction(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(db);
   Utf8Value name(env->isolate(), args[0].As<String>());
   Local<Object> options = args[1].As<Object>();
   Local<Value> start_v;
@@ -2178,6 +2206,7 @@ void DatabaseSync::CreateSession(const FunctionCallbackInfo<Value>& args) {
   DatabaseSync* db;
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(db);
 
   sqlite3_session* pSession;
   int r = sqlite3session_create(db->connection_, db_name.c_str(), &pSession);
@@ -2212,6 +2241,7 @@ void Backup(const FunctionCallbackInfo<Value>& args) {
   DatabaseSync* db;
   ASSIGN_OR_RETURN_UNWRAP(&db, args[0].As<Object>());
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(db);
   std::optional<std::string> dest_path =
       ValidateDatabasePath(env, args[1], "path");
   if (!dest_path.has_value()) {
@@ -2347,6 +2377,7 @@ void DatabaseSync::ApplyChangeset(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(db);
 
   if (!args[0]->IsUint8Array()) {
     THROW_ERR_INVALID_ARG_TYPE(
@@ -2482,6 +2513,7 @@ void DatabaseSync::EnableLoadExtension(
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(db);
 
   Isolate* isolate = env->isolate();
   if (!args[0]->IsBoolean()) {
@@ -2510,6 +2542,7 @@ void DatabaseSync::EnableDefensive(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(db);
 
   Isolate* isolate = env->isolate();
   if (!args[0]->IsBoolean()) {
@@ -2563,6 +2596,7 @@ void DatabaseSync::SetAuthorizer(const FunctionCallbackInfo<Value>& args) {
   ASSIGN_OR_RETURN_UNWRAP(&db, args.This());
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(env, !db->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(db);
 
   Isolate* isolate = env->isolate();
 
@@ -3202,6 +3236,7 @@ void StatementSync::All(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  ConnectionAccessGuard conn_guard(stmt->db_.get());
   Isolate* isolate = env->isolate();
   int r = stmt->ResetStatement();
   CHECK_ERROR_OR_THROW(isolate, stmt->db_.get(), r, SQLITE_OK, void());
@@ -3234,6 +3269,7 @@ void StatementSync::Iterate(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  ConnectionAccessGuard conn_guard(stmt->db_.get());
   int r = stmt->ResetStatement();
   CHECK_ERROR_OR_THROW(env->isolate(), stmt->db_.get(), r, SQLITE_OK, void());
 
@@ -3257,6 +3293,7 @@ void StatementSync::Get(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  ConnectionAccessGuard conn_guard(stmt->db_.get());
   int r = stmt->ResetStatement();
   CHECK_ERROR_OR_THROW(env->isolate(), stmt->db_.get(), r, SQLITE_OK, void());
 
@@ -3282,6 +3319,7 @@ void StatementSync::Run(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  ConnectionAccessGuard conn_guard(stmt->db_.get());
   int r = stmt->ResetStatement();
   CHECK_ERROR_OR_THROW(env->isolate(), stmt->db_.get(), r, SQLITE_OK, void());
 
@@ -3303,6 +3341,7 @@ void StatementSync::Columns(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  ConnectionAccessGuard conn_guard(stmt->db_.get());
   int num_cols = sqlite3_column_count(stmt->statement_.get());
   Isolate* isolate = env->isolate();
   LocalVector<Value> cols(isolate);
@@ -3346,6 +3385,7 @@ void StatementSync::SourceSQLGetter(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  ConnectionAccessGuard conn_guard(stmt->db_.get());
   Local<String> sql;
   if (!String::NewFromUtf8(env->isolate(), sqlite3_sql(stmt->statement_.get()))
            .ToLocal(&sql)) {
@@ -3360,6 +3400,7 @@ void StatementSync::ExpandedSQLGetter(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  ConnectionAccessGuard conn_guard(stmt->db_.get());
 
   // sqlite3_expanded_sql may return nullptr without producing an error code.
   char* expanded = sqlite3_expanded_sql(stmt->statement_.get());
@@ -3437,6 +3478,7 @@ void StatementSync::SetAllowBareNamedParameters(
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  ConnectionAccessGuard conn_guard(stmt->db_.get());
 
   if (!args[0]->IsBoolean()) {
     THROW_ERR_INVALID_ARG_TYPE(
@@ -3455,6 +3497,7 @@ void StatementSync::SetAllowUnknownNamedParameters(
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  ConnectionAccessGuard conn_guard(stmt->db_.get());
 
   if (!args[0]->IsBoolean()) {
     THROW_ERR_INVALID_ARG_TYPE(env->isolate(),
@@ -3471,6 +3514,7 @@ void StatementSync::SetReadBigInts(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  ConnectionAccessGuard conn_guard(stmt->db_.get());
 
   if (!args[0]->IsBoolean()) {
     THROW_ERR_INVALID_ARG_TYPE(
@@ -3487,6 +3531,7 @@ void StatementSync::SetReturnArrays(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, stmt->IsFinalized(), "statement has been finalized");
+  ConnectionAccessGuard conn_guard(stmt->db_.get());
 
   if (!args[0]->IsBoolean()) {
     THROW_ERR_INVALID_ARG_TYPE(
@@ -3618,6 +3663,7 @@ void SQLTagStore::Run(const FunctionCallbackInfo<Value>& args) {
 
   THROW_AND_RETURN_ON_BAD_STATE(
       env, !session->database_->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(session->database_.get());
 
   BaseObjectPtr<StatementSync> stmt = PrepareStatement(args);
 
@@ -3644,6 +3690,7 @@ void SQLTagStore::Iterate(const FunctionCallbackInfo<Value>& args) {
 
   THROW_AND_RETURN_ON_BAD_STATE(
       env, !session->database_->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(session->database_.get());
 
   BaseObjectPtr<StatementSync> stmt = PrepareStatement(args);
 
@@ -3672,6 +3719,7 @@ void SQLTagStore::Get(const FunctionCallbackInfo<Value>& args) {
 
   THROW_AND_RETURN_ON_BAD_STATE(
       env, !session->database_->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(session->database_.get());
 
   BaseObjectPtr<StatementSync> stmt = PrepareStatement(args);
 
@@ -3702,6 +3750,7 @@ void SQLTagStore::All(const FunctionCallbackInfo<Value>& args) {
 
   THROW_AND_RETURN_ON_BAD_STATE(
       env, !session->database_->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(session->database_.get());
 
   BaseObjectPtr<StatementSync> stmt = PrepareStatement(args);
 
@@ -3940,6 +3989,7 @@ void StatementSyncIterator::Next(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, iter->stmt_->IsFinalized(), "statement has been finalized");
+  ConnectionAccessGuard conn_guard(iter->stmt_->db_.get());
   Isolate* isolate = env->isolate();
 
   auto iter_template = getLazyIterTemplate(env);
@@ -4020,6 +4070,7 @@ void StatementSyncIterator::Return(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, iter->stmt_->IsFinalized(), "statement has been finalized");
+  ConnectionAccessGuard conn_guard(iter->stmt_->db_.get());
   Isolate* isolate = env->isolate();
 
   // Unlike Next(), the reset result is intentionally ignored here: Return()
@@ -4100,6 +4151,7 @@ void Session::Changeset(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, !session->database_->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(session->database_.get());
   THROW_AND_RETURN_ON_BAD_STATE(
       env, session->session_ == nullptr, "session is not open");
 
@@ -4126,6 +4178,7 @@ void Session::Close(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   THROW_AND_RETURN_ON_BAD_STATE(
       env, !session->database_->IsOpen(), "database is not open");
+  ConnectionAccessGuard conn_guard(session->database_.get());
   THROW_AND_RETURN_ON_BAD_STATE(
       env, session->session_ == nullptr, "session is not open");
 
