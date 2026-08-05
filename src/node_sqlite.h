@@ -173,7 +173,8 @@ class StatementExecutionHelper {
                                        DatabaseSync* db,
                                        sqlite3_stmt* stmt,
                                        bool return_arrays,
-                                       bool use_big_ints);
+                                       bool use_big_ints,
+                                       StatementSync* owner = nullptr);
   static v8::MaybeLocal<v8::Object> Run(Environment* env,
                                         DatabaseSync* db,
                                         sqlite3_stmt* stmt,
@@ -191,7 +192,8 @@ class StatementExecutionHelper {
                                        DatabaseSync* db,
                                        sqlite3_stmt* stmt,
                                        bool return_arrays,
-                                       bool use_big_ints);
+                                       bool use_big_ints,
+                                       StatementSync* owner = nullptr);
 };
 
 class DatabaseSync : public BaseObject {

@@ -2990,7 +2990,8 @@ MaybeLocal<Value> StatementExecutionHelper::All(Environment* env,
                                                 DatabaseSync* db,
                                                 sqlite3_stmt* stmt,
                                                 bool return_arrays,
-                                                bool use_big_ints) {
+                                                bool use_big_ints,
+                                                StatementSync* owner) {
   Isolate* isolate = env->isolate();
   EscapableHandleScope scope(isolate);
   int r;
@@ -3015,13 +3016,21 @@ MaybeLocal<Value> StatementExecutionHelper::All(Environment* env,
       rows.emplace_back(row_array);
     } else {
       if (row_keys.size() == 0) {
-        row_keys.reserve(num_cols);
-        for (int i = 0; i < num_cols; ++i) {
-          Local<Name> key;
-          if (!ColumnNameToName(env, stmt, i).ToLocal(&key)) {
+        if (owner != nullptr) {
+          // Reuses the statement's internalized column names instead of
+          // re-interning them on every call.
+          if (!owner->GetCachedColumnNames(&row_keys)) {
             return MaybeLocal<Value>();
           }
-          row_keys.emplace_back(key);
+        } else {
+          row_keys.reserve(num_cols);
+          for (int i = 0; i < num_cols; ++i) {
+            Local<Name> key;
+            if (!ColumnNameToName(env, stmt, i).ToLocal(&key)) {
+              return MaybeLocal<Value>();
+            }
+            row_keys.emplace_back(key);
+          }
         }
       }
       DCHECK_EQ(row_keys.size(), row_values.size());
@@ -3125,7 +3134,8 @@ MaybeLocal<Value> StatementExecutionHelper::Get(Environment* env,
                                                 DatabaseSync* db,
                                                 sqlite3_stmt* stmt,
                                                 bool return_arrays,
-                                                bool use_big_ints) {
+                                                bool use_big_ints,
+                                                StatementSync* owner) {
   Isolate* isolate = env->isolate();
   EscapableHandleScope scope(isolate);
   bool needs_reset = true;
@@ -3160,13 +3170,21 @@ MaybeLocal<Value> StatementExecutionHelper::Get(Environment* env,
     result = Array::New(isolate, row_values.data(), row_values.size());
   } else {
     LocalVector<Name> keys(isolate);
-    keys.reserve(num_cols);
-    for (int i = 0; i < num_cols; ++i) {
-      Local<Name> key;
-      if (!ColumnNameToName(env, stmt, i).ToLocal(&key)) {
+    if (owner != nullptr) {
+      // Reuses the statement's internalized column names instead of
+      // re-interning them on every call.
+      if (!owner->GetCachedColumnNames(&keys)) {
         return MaybeLocal<Value>();
       }
-      keys.emplace_back(key);
+    } else {
+      keys.reserve(num_cols);
+      for (int i = 0; i < num_cols; ++i) {
+        Local<Name> key;
+        if (!ColumnNameToName(env, stmt, i).ToLocal(&key)) {
+          return MaybeLocal<Value>();
+        }
+        keys.emplace_back(key);
+      }
     }
 
     DCHECK_EQ(keys.size(), row_values.size());
@@ -3201,7 +3219,8 @@ void StatementSync::All(const FunctionCallbackInfo<Value>& args) {
                                     stmt->db_.get(),
                                     stmt->statement_.get(),
                                     stmt->return_arrays_,
-                                    stmt->use_big_ints_)
+                                    stmt->use_big_ints_,
+                                    stmt)
           .ToLocal(&result)) {
     RESET_AND_CHECK(
         isolate, stmt->db_.get(), stmt->statement_.get(), needs_reset, void());
@@ -3250,7 +3269,8 @@ void StatementSync::Get(const FunctionCallbackInfo<Value>& args) {
                                     stmt->db_.get(),
                                     stmt->statement_.get(),
                                     stmt->return_arrays_,
-                                    stmt->use_big_ints_)
+                                    stmt->use_big_ints_,
+                                    stmt)
           .ToLocal(&result)) {
     args.GetReturnValue().Set(result);
   }
@@ -3668,7 +3688,8 @@ void SQLTagStore::Get(const FunctionCallbackInfo<Value>& args) {
                                     stmt->db_.get(),
                                     stmt->statement_.get(),
                                     stmt->return_arrays_,
-                                    stmt->use_big_ints_)
+                                    stmt->use_big_ints_,
+                                    stmt.get())
           .ToLocal(&result)) {
     args.GetReturnValue().Set(result);
   }
@@ -3702,7 +3723,8 @@ void SQLTagStore::All(const FunctionCallbackInfo<Value>& args) {
                                     stmt->db_.get(),
                                     stmt->statement_.get(),
                                     stmt->return_arrays_,
-                                    stmt->use_big_ints_)
+                                    stmt->use_big_ints_,
+                                    stmt.get())
           .ToLocal(&result)) {
     RESET_AND_CHECK(
         isolate, stmt->db_.get(), stmt->statement_.get(), needs_reset, void());
